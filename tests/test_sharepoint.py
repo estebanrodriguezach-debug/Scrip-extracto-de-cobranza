@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 
 import openpyxl
+import requests
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
@@ -33,12 +34,17 @@ from clasificador.sharepoint import (  # noqa: E402
     combinar,
     decodificar_link,
     listar,
+    resolver_carpeta,
     volcar,
 )
 
+# Link inventado, con la forma exacta de uno real: ':f:' de carpeta, '/s/' del
+# sitio y el '?e=' del token de comparticion. Los tests dependen de la FORMA,
+# nunca del valor. El link de verdad no va aca: el '?e=...' es una credencial
+# (se puede revocar, y quien lo tiene abre la carpeta) y el repo queda en git.
 URL_CARPETA = (
-    "https://achconstrucciones246.sharepoint.com/:f:/s/AdministracionyFinanzas/"
-    "IgBzJED7ng-gSJ8pFx9XNs9UAS1olb0dYg0_W14PbLMXyEk?e=AcMGK2"
+    "https://contoso.sharepoint.com/:f:/s/AdministracionyFinanzas/"
+    "IgBxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?e=XXXXXX"
 )
 
 
@@ -81,7 +87,7 @@ class TestCodificarLink(unittest.TestCase):
 class TestAnalizarLink(unittest.TestCase):
     def test_link_de_carpeta_real(self):
         link = analizar_link(URL_CARPETA)
-        self.assertEqual(link.hostname, "achconstrucciones246.sharepoint.com")
+        self.assertEqual(link.hostname, "contoso.sharepoint.com")
         self.assertEqual(link.tipo, "carpeta")
         # '/s/' es la forma corta de '/sites/'
         self.assertEqual(link.ruta_sitio, "/sites/AdministracionyFinanzas")
@@ -132,8 +138,10 @@ class TestArmarLibro(unittest.TestCase):
         self.assertEqual(len(validaciones), 1)
         dv = validaciones[0]
         self.assertEqual(dv.type, "list")
+        # Sin '=' adelante: openpyxl escribe la formula verbatim y Excel ofrece
+        # reparar el archivo si la encuentra con el signo igual.
         self.assertEqual(
-            dv.formula1, f"={HOJA_LISTAS}!$A$1:$A${len(self.juego.categorias_validas)}"
+            dv.formula1, f"{HOJA_LISTAS}!$A$1:$A${len(self.juego.categorias_validas)}"
         )
         self.assertTrue(str(dv.sqref).startswith("F2:F"))
         # showDropDown esta invertido en OOXML: True esconderia la flechita.
@@ -144,7 +152,8 @@ class TestArmarLibro(unittest.TestCase):
         ws = self.libro[HOJA_DATOS]
         self.assertIsInstance(ws["A2"].value, dt.datetime)
         self.assertEqual(ws["A2"].value.date(), dt.date(2026, 3, 1))
-        self.assertEqual(ws["A2"].number_format, "yyyy-mm-dd")
+        # mm-dd-yy es el formato del Extractos_cobranzas.xlsx original.
+        self.assertEqual(ws["A2"].number_format, "mm-dd-yy")
         # Excel guarda 1000.0 y lo devuelve como int: lo que importa es que sea
         # un numero y no una cadena.
         self.assertIsInstance(ws["C2"].value, (int, float))
@@ -204,18 +213,29 @@ class TestCombinar(unittest.TestCase):
 
 # --- Graph simulado --------------------------------------------------------
 class RespuestaFalsa:
-    def __init__(self, status_code: int = 200, cuerpo=None, content: bytes = b""):
+    def __init__(
+        self,
+        status_code: int = 200,
+        cuerpo=None,
+        content: bytes = b"",
+        headers: dict | None = None,
+    ):
         self.status_code = status_code
         self._cuerpo = cuerpo if cuerpo is not None else {}
         self.content = content
         self.text = str(cuerpo)
+        self.headers = headers or {}
 
     def json(self):
         return self._cuerpo
 
 
 class SesionFalsa:
-    """Reemplaza a requests.Session: guarda los pedidos y devuelve lo preparado."""
+    """Reemplaza a requests.Session: guarda los pedidos y devuelve lo preparado.
+
+    Una respuesta puede ser una lista: se van devolviendo de a una, que es como
+    se prueban los reintentos.
+    """
 
     def __init__(self, respuestas: dict):
         self.headers: dict[str, str] = {}
@@ -228,8 +248,12 @@ class SesionFalsa:
         for clave, respuesta in self.respuestas.items():
             esperado, _, fragmento = clave.partition(" ")
             if metodo == esperado and fragmento in url:
+                if isinstance(respuesta, list):
+                    return respuesta.pop(0) if len(respuesta) > 1 else respuesta[0]
                 return respuesta
-        return RespuestaFalsa(404, {"error": {"code": "itemNotFound", "message": url}})
+        return RespuestaFalsa(
+            404, {"error": {"code": "itemNotFound", "message": "no preparado"}}
+        )
 
 
 class TestClienteGraph(unittest.TestCase):
@@ -268,6 +292,42 @@ class TestClienteGraph(unittest.TestCase):
         )
         archivos = listar(ClienteGraph("tok", sesion), Carpeta("d", "i"))
         self.assertEqual([a.nombre for a in archivos], ["a.xlsx", "b.xlsx"])
+        # Sin 'folder' en el $select, Graph no devuelve la faceta y la
+        # subcarpeta se colaria como si fuera un archivo.
+        self.assertIn("folder", sesion.pedidos[0][2]["params"]["$select"])
+
+    def test_el_429_se_reintenta_respetando_el_retry_after(self):
+        """Abortar la corrida del cron por un throttling pasajero no sirve."""
+        sesion = SesionFalsa(
+            {
+                "GET /children": [
+                    RespuestaFalsa(429, {}, headers={"Retry-After": "0"}),
+                    RespuestaFalsa(200, {"value": []}),
+                ]
+            }
+        )
+        self.assertEqual(listar(ClienteGraph("tok", sesion), Carpeta("d", "i")), [])
+        self.assertEqual(len(sesion.pedidos), 2)
+
+    def test_la_falla_de_red_dice_que_hacer(self):
+        class SesionCaida(SesionFalsa):
+            def request(self, metodo, url, **kwargs):
+                raise requests.exceptions.ProxyError("sin tunel")
+
+        with self.assertRaises(RuntimeError) as capturado:
+            listar(ClienteGraph("tok", SesionCaida({})), Carpeta("d", "i"))
+        self.assertIn("HTTPS_PROXY", str(capturado.exception))
+
+    def test_el_error_no_filtra_el_token_del_link_compartido(self):
+        """El share id es la URL compartida en base64: se decodifica en una linea."""
+        sesion = SesionFalsa({})  # cualquier ruta devuelve 404
+        cliente = ClienteGraph("tok", sesion)
+        with self.assertRaises(RuntimeError) as capturado:
+            resolver_carpeta(cliente, URL_CARPETA)
+        mensaje = str(capturado.exception)
+        self.assertIn("<link-redactado>", mensaje)
+        self.assertNotIn(codificar_link(URL_CARPETA), mensaje)
+        self.assertNotIn("e=XXXXXX", mensaje)
 
     def test_el_403_explica_quien_concede_el_permiso(self):
         sesion = SesionFalsa(
@@ -372,6 +432,73 @@ class TestVolcar(unittest.TestCase):
         )
         self.assertEqual(resumen.agregados, 0)
         self.assertFalse([p for p in sesion.pedidos if p[0] == "PUT"])
+
+    def test_el_archivo_que_ya_estaba_no_es_del_script(self):
+        """En la carpeta puede haber un homonimo que sea cualquier otra cosa."""
+        juego = cargar_reglas()
+        otro = openpyxl.Workbook()
+        otro.active.title = "Hoja1"
+        buffer = io.BytesIO()
+        otro.save(buffer)
+        sesion = SesionFalsa(
+            {
+                "GET /children": RespuestaFalsa(
+                    200,
+                    {
+                        "value": [
+                            {
+                                "id": "item-1",
+                                "name": "Extractos_cobranzas.xlsx",
+                                "size": 1,
+                                "lastModifiedDateTime": "2026-01-01T00:00:00Z",
+                            }
+                        ]
+                    },
+                ),
+                "GET /content": RespuestaFalsa(200, {}, content=buffer.getvalue()),
+            }
+        )
+        with self.assertRaises(RuntimeError) as capturado:
+            volcar(
+                ClienteGraph("tok", sesion),
+                Carpeta("d", "i"),
+                [_mov(1, 1000.0, "TRANSF 123")],
+                juego,
+            )
+        mensaje = str(capturado.exception)
+        self.assertIn("Extractos_cobranzas.xlsx", mensaje)
+        self.assertIn("'Hoja1'", mensaje)
+        self.assertIn("--nombre", mensaje)
+        self.assertFalse([p for p in sesion.pedidos if p[0] == "PUT"])
+
+    def test_un_archivo_que_ni_siquiera_es_xlsx(self):
+        juego = cargar_reglas()
+        sesion = SesionFalsa(
+            {
+                "GET /children": RespuestaFalsa(
+                    200,
+                    {
+                        "value": [
+                            {
+                                "id": "item-1",
+                                "name": "Extractos_cobranzas.xlsx",
+                                "size": 1,
+                                "lastModifiedDateTime": "2026-01-01T00:00:00Z",
+                            }
+                        ]
+                    },
+                ),
+                "GET /content": RespuestaFalsa(200, {}, content=b"fecha;banco\n"),
+            }
+        )
+        with self.assertRaises(RuntimeError) as capturado:
+            volcar(
+                ClienteGraph("tok", sesion),
+                Carpeta("d", "i"),
+                [_mov(1, 1000.0, "TRANSF 123")],
+                juego,
+            )
+        self.assertIn("no es un .xlsx valido", str(capturado.exception))
 
     def test_primera_corrida_con_la_carpeta_vacia(self):
         juego = cargar_reglas()

@@ -27,13 +27,20 @@ from __future__ import annotations
 import base64
 import io
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
+import openpyxl
 import requests
 
-from clasificador.excel import Movimiento, claves_con_ocurrencia, leer_movimientos
+from clasificador.excel import (
+    HOJA_DATOS,
+    Movimiento,
+    claves_con_ocurrencia,
+    leer_movimientos,
+)
 from clasificador.libro import armar_libro
 from clasificador.reglas import JuegoDeReglas
 
@@ -51,11 +58,23 @@ NOMBRE_POR_DEFECTO = "Extractos_cobranzas.xlsx"
 CACHE_DEVICE_CODE = Path.home() / ".cache" / "cobranzas" / "token_sharepoint.json"
 
 # El PUT simple admite hasta 250 MB, pero arriba de unos pocos MB conviene la
-# upload session: parte el archivo y se puede reintentar sin resubir todo. El
-# extracto pesa kilobytes, asi que en la practica siempre va por el PUT simple.
+# upload session: parte el archivo y cada trozo se reintenta solo, sin resubir
+# los que ya entraron. El extracto pesa kilobytes, asi que en la practica
+# siempre va por el PUT simple.
 LIMITE_SUBIDA_SIMPLE = 4 * 1024 * 1024
 # La doc exige que cada trozo sea multiplo de 320 KiB y menor a 60 MiB.
 TAMANIO_TROZO = 10 * 320 * 1024
+
+# Timeout partido: si el host no contesta en 15s el problema es la red y no
+# tiene sentido esperar; la lectura, en cambio, puede tardar lo que tarde una
+# subida. Con un solo numero el script se quedaba 5 minutos mudo.
+TIMEOUT = (15, 300)
+# Reintentos de los errores transitorios (throttling y caidas momentaneas de
+# Graph). Son pocos a proposito: si el tenant esta limitando de verdad,
+# insistir no ayuda.
+REINTENTOS = 3
+ESTADOS_REINTENTABLES = (429, 503, 504)
+ESPERA_MAXIMA = 60
 
 # Significado de los ':x:' del link compartido. No esta documentado por
 # Microsoft, sale de observar los links; solo se usa para avisar temprano si el
@@ -186,6 +205,7 @@ def _token_device_code(config: ConfigSharePoint, cache: Path = CACHE_DEVICE_CODE
 
     almacen = msal.SerializableTokenCache()
     if cache.exists():
+        _restringir_permisos(cache)  # por si quedo flojo de una corrida vieja
         almacen.deserialize(cache.read_text(encoding="utf-8"))
 
     app = msal.PublicClientApplication(
@@ -212,13 +232,38 @@ def _token_device_code(config: ConfigSharePoint, cache: Path = CACHE_DEVICE_CODE
         resp = app.acquire_token_by_device_flow(flujo)  # bloquea hasta el login
 
     if almacen.has_state_changed:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(almacen.serialize(), encoding="utf-8")
-        cache.chmod(0o600)  # tiene un refresh token adentro
+        _guardar_cache(cache, almacen.serialize())
 
     if "access_token" not in resp:
         raise RuntimeError(_explicar_error_token(resp))
     return resp["access_token"]
+
+
+def _restringir_permisos(cache: Path) -> None:
+    """Deja el cache y su directorio legibles solo por el dueno.
+
+    Se llama tambien al leer: un archivo que quedo con 0644 de una corrida
+    vieja no se arregla solo, y adentro hay un refresh token delegado que con
+    Files.ReadWrite.All vale por todo lo que ve el usuario durante ~90 dias.
+    """
+    cache.parent.chmod(0o700)
+    cache.chmod(0o600)
+
+
+def _guardar_cache(cache: Path, contenido: str) -> None:
+    """Escribe el cache del token naciendo ya con 0600.
+
+    Crear el archivo y recien despues hacerle chmod deja una ventana en la que
+    el refresh token es legible por cualquier usuario de la maquina; en un host
+    compartido (el servidor del cron, Cloud Shell) eso alcanza. ``mkdir`` con
+    ``mode`` solo aplica cuando crea, asi que el directorio se corrige aparte.
+    """
+    cache.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    cache.parent.chmod(0o700)
+    fd = os.open(cache, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as archivo:
+        archivo.write(contenido)
+    cache.chmod(0o600)  # si el archivo ya existia, el modo de os.open no aplica
 
 
 def _explicar_error_token(resp: dict) -> str:
@@ -295,17 +340,99 @@ class ClienteGraph:
 
         ``ok_404=True`` devuelve ``None`` en lugar de reventar: es lo que
         distingue "el archivo todavia no existe" de un error de verdad.
+
+        Los 429/503/504 se reintentan solos: decirle "esperá un minuto" a una
+        corrida de cron es decirle nada, el volcado del dia simplemente no pasa.
         """
         url = ruta if ruta.startswith("http") else GRAPH + ruta
-        resp = self.sesion.request(metodo, url, timeout=300, **kwargs)
+        for intento in range(REINTENTOS):
+            resp = self._request(metodo, url, **kwargs)
+            if resp.status_code not in ESTADOS_REINTENTABLES:
+                break
+            if intento == REINTENTOS - 1:
+                break
+            espera = _espera_sugerida(resp, intento)
+            print(
+                f"Graph respondio {resp.status_code} y pidio esperar {espera}s; "
+                f"reintentando ({intento + 2} de {REINTENTOS})...",
+                flush=True,
+            )
+            time.sleep(espera)
         if resp.status_code == 404 and ok_404:
             return None
         if resp.status_code >= 400:
             raise RuntimeError(_explicar_error_graph(metodo, url, resp))
         return resp
 
+    def _request(self, metodo: str, url: str, **kwargs) -> requests.Response:
+        """El pedido crudo, con las fallas de red traducidas."""
+        try:
+            return self.sesion.request(metodo, url, timeout=TIMEOUT, **kwargs)
+        except requests.exceptions.RequestException as error:
+            raise RuntimeError(_explicar_error_red(error, metodo, url)) from error
+
     def json(self, metodo: str, ruta: str, **kwargs) -> dict:
         return self.pedir(metodo, ruta, **kwargs).json()
+
+
+def _espera_sugerida(resp: requests.Response, intento: int) -> int:
+    """Segundos a esperar: los que diga ``Retry-After``, o backoff con tope."""
+    cabecera = (resp.headers or {}).get("Retry-After", "")
+    try:
+        return min(int(cabecera), ESPERA_MAXIMA)
+    except (TypeError, ValueError):
+        return min(2 ** (intento + 1), ESPERA_MAXIMA)
+
+
+def _url_segura(url: str) -> str:
+    """Tapa el share id antes de imprimir una URL.
+
+    ``/shares/u!<base64url>`` lleva adentro el link compartido entero, con su
+    ``?e=...``, y se decodifica en una linea (ver ``decodificar_link``). Un 404
+    que termina en el log del cron o pegado en un ticket no tiene por que
+    regalar el link vivo de la carpeta. El resto de las rutas (``/sites``,
+    ``/drives``) no tienen secretos y se muestran enteras.
+    """
+    inicio = url.find("/shares/")
+    if inicio < 0:
+        return url
+    fin = url.find("/", inicio + len("/shares/"))
+    return url[:inicio] + "/shares/<link-redactado>" + (url[fin:] if fin >= 0 else "")
+
+
+def _explicar_error_red(error: Exception, metodo: str, url: str) -> str:
+    """Traduce las fallas de red, que en una PC de oficina son las mas comunes.
+
+    El orden importa: en requests, ``ProxyError`` y ``SSLError`` heredan de
+    ``ConnectionError``, y ``ConnectTimeout`` de las dos ramas.
+    """
+    fallas = requests.exceptions
+    if isinstance(error, fallas.ProxyError):
+        ayuda = (
+            "No pude salir por el proxy. Si la empresa usa uno, exportalo antes "
+            "de correr el comando:\n"
+            "  export HTTPS_PROXY=http://usuario:clave@proxy.empresa:8080"
+        )
+    elif isinstance(error, fallas.SSLError):
+        ayuda = (
+            "Fallo la verificacion del certificado TLS. Pasa cuando el firewall "
+            "inspecciona el trafico: pedile a sistemas el certificado de la "
+            "empresa y exporta REQUESTS_CA_BUNDLE=/ruta/al/certificado.pem. "
+            "No desactives la verificacion."
+        )
+    elif isinstance(error, fallas.Timeout):
+        ayuda = "El servidor no contesto a tiempo. Reintenta en un rato."
+    elif isinstance(error, fallas.ConnectionError):
+        ayuda = (
+            "No hay conexion con graph.microsoft.com. Revisa internet y el DNS; "
+            "si estas detras de un proxy, exporta HTTPS_PROXY."
+        )
+    else:
+        ayuda = "Revisa la conexion y reintenta."
+    return (
+        f"No pude hablar con Microsoft Graph ({metodo} {_url_segura(url)}).\n"
+        f"{ayuda}\n{type(error).__name__}: {error}"
+    )
 
 
 def _explicar_error_graph(metodo: str, url: str, resp: requests.Response) -> str:
@@ -336,12 +463,25 @@ def _explicar_error_graph(metodo: str, url: str, resp: requests.Response) -> str
             "-AppId <client-id> -Permissions Write -Site <url del sitio>."
         )
     elif resp.status_code == 404:
-        ayuda = (
-            "\nGraph no encuentra el recurso. Si es la carpeta: revisa que el "
-            "link siga vigente (el '?e=...' se puede revocar) y que la app tenga "
-            "permiso sobre el sitio; con Sites.Selected sin el grant, Graph "
-            "responde 404 en vez de 403."
-        )
+        # El consejo depende del camino: por link no hay nombres que revisar, y
+        # por ruta de sitio no hay ningun link que pueda haber caducado.
+        if "/shares/" in url:
+            ayuda = (
+                "\nGraph no encuentra la carpeta del link. Revisa que el link "
+                "siga vigente (el '?e=...' se puede revocar) y que la app tenga "
+                "permiso sobre el sitio; con Sites.Selected sin el grant, Graph "
+                "responde 404 en vez de 403."
+            )
+        else:
+            ayuda = (
+                "\nGraph no encuentra el recurso. Por este camino no hay ningun "
+                "link de por medio: lo que suele estar mal es lo que se escribio "
+                "a mano. Revisa el nombre exacto del sitio (--sitio), el de la "
+                "biblioteca (--biblioteca) y el de la subcarpeta (--subcarpeta); "
+                "ojo que la biblioteca principal se llama 'Documents' o "
+                "'Documentos' segun el idioma del tenant. Con Sites.Selected sin "
+                "el grant sobre el sitio, Graph tambien responde 404 en vez de 403."
+            )
     elif resp.status_code == 412:
         ayuda = (
             "\nAlguien modifico el archivo en SharePoint mientras corria esto. "
@@ -353,8 +493,17 @@ def _explicar_error_graph(metodo: str, url: str, resp: requests.Response) -> str
             "de escritorio. Pedile que lo cierre y reintenta."
         )
     elif resp.status_code == 429:
-        ayuda = "\nGraph te esta limitando (throttling). Esperá un minuto y reintenta."
-    return f"Graph {resp.status_code} en {metodo} {url}\n{detalle}{ayuda}"
+        ayuda = (
+            "\nGraph te esta limitando (throttling) y los reintentos automaticos "
+            f"no alcanzaron ({REINTENTOS} intentos). Espera unos minutos."
+        )
+    elif resp.status_code in (500, 503, 504):
+        ayuda = (
+            "\nEs una falla momentanea del lado de Microsoft, no de la "
+            f"configuracion. Se reintento {REINTENTOS} veces sin suerte: volve "
+            "a correr el comando mas tarde."
+        )
+    return f"Graph {resp.status_code} en {metodo} {_url_segura(url)}\n{detalle}{ayuda}"
 
 
 # --- resolucion de la carpeta ----------------------------------------------
@@ -425,17 +574,41 @@ def resolver_sitio(
     campos = "?$select=id,name,webUrl"
     if subcarpeta.strip("/"):
         ruta = quote(subcarpeta.strip("/"))
-        item = cliente.json("GET", f"/drives/{drive_id}/root:/{ruta}{campos}")
+        # ok_404 para poder decir que carpetas SI hay, en lugar del 404 pelado.
+        resp = cliente.pedir(
+            "GET", f"/drives/{drive_id}/root:/{ruta}{campos}", ok_404=True
+        )
+        if resp is None:
+            raise RuntimeError(_sin_subcarpeta(cliente, drive_id, subcarpeta))
+        item = resp.json()
     else:
         item = cliente.json("GET", f"/drives/{drive_id}/root{campos}")
     return Carpeta(drive_id, item["id"], item.get("name", ""), item.get("webUrl", ""))
+
+
+def _sin_subcarpeta(cliente: ClienteGraph, drive_id: str, subcarpeta: str) -> str:
+    """El 404 de ``--subcarpeta``, con la lista de lo que si hay en la raiz."""
+    hijos = cliente.json(
+        "GET", f"/drives/{drive_id}/root/children", params={"$select": "name,folder"}
+    )
+    carpetas = [h["name"] for h in hijos.get("value", []) if "folder" in h]
+    hay = ", ".join(repr(n) for n in carpetas) if carpetas else "ninguna"
+    return (
+        f"No hay una carpeta {subcarpeta!r} en la biblioteca. En la raiz hay: {hay}.\n"
+        "Ojo que --subcarpeta es la ruta DENTRO de la biblioteca, sin el nombre "
+        "de la biblioteca adelante: 'Extractos', no "
+        "'Documentos compartidos/Extractos'."
+    )
 
 
 # --- archivos --------------------------------------------------------------
 def listar(cliente: ClienteGraph, carpeta: Carpeta) -> list[ArchivoRemoto]:
     """Lista los archivos de la carpeta, siguiendo la paginacion de Graph."""
     ruta = f"/drives/{carpeta.drive_id}/items/{carpeta.item_id}/children"
-    params = {"$select": "id,name,size,lastModifiedDateTime,eTag", "$top": "200"}
+    # 'folder' tiene que estar en el $select: sin pedirla, Graph no devuelve la
+    # faceta y el filtro de abajo no filtra nada, asi que las subcarpetas se
+    # colarian como si fueran archivos.
+    params = {"$select": "id,name,size,lastModifiedDateTime,eTag,folder", "$top": "200"}
     archivos = []
     while ruta:
         pagina = cliente.json("GET", ruta, params=params)
@@ -523,20 +696,58 @@ def _subir_en_partes(
     resp = None
     for inicio in range(0, total, TAMANIO_TROZO):  # tienen que ir en orden
         fin = min(inicio + TAMANIO_TROZO, total) - 1
-        # La uploadUrl ya viene autorizada: mandarle el Bearer la rechaza.
-        resp = requests.put(
-            url,
-            data=datos[inicio : fin + 1],
-            headers={"Content-Range": f"bytes {inicio}-{fin}/{total}"},
-            timeout=300,
-        )
+        resp = _subir_trozo(url, datos[inicio : fin + 1], inicio, fin, total)
         if resp.status_code not in (200, 201, 202):
-            requests.delete(url, timeout=30)  # no dejar la sesion colgada
-            raise RuntimeError(
-                f"Fallo el trozo {inicio}-{fin} de {nombre}: "
-                f"{resp.status_code} {resp.text[:300]}"
-            )
+            detalle = f"{resp.status_code} {resp.text[:300]}"
+            _cancelar_sesion(url)  # el DELETE va despues de leer la respuesta
+            raise RuntimeError(f"Fallo el trozo {inicio}-{fin} de {nombre}: {detalle}")
     return resp.json()
+
+
+def _subir_trozo(
+    url: str, trozo: bytes, inicio: int, fin: int, total: int
+) -> requests.Response:
+    """Sube un trozo, reintentandolo si se corta la red.
+
+    Es para lo que existe partir el archivo: Graph acepta que se reenvie el
+    mismo rango mientras la sesion viva, asi que un corte no obliga a resubir
+    los trozos que ya entraron.
+    """
+    ultimo: Exception | None = None
+    for intento in range(REINTENTOS):
+        try:
+            # La uploadUrl ya viene autorizada: mandarle el Bearer la rechaza.
+            return requests.put(
+                url,
+                data=trozo,
+                headers={"Content-Range": f"bytes {inicio}-{fin}/{total}"},
+                timeout=TIMEOUT,
+            )
+        except requests.exceptions.RequestException as error:
+            ultimo = error
+            if intento == REINTENTOS - 1:
+                break
+            espera = min(2 ** (intento + 1), ESPERA_MAXIMA)
+            print(
+                f"Se corto la subida del trozo {inicio}-{fin}; "
+                f"reintentando en {espera}s...",
+                flush=True,
+            )
+            time.sleep(espera)
+    _cancelar_sesion(url)
+    raise RuntimeError(_explicar_error_red(ultimo, "PUT", url)) from ultimo
+
+
+def _cancelar_sesion(url: str) -> None:
+    """Borra la upload session para no dejarla colgada hasta que expire.
+
+    Va en su propio try: si la red sigue caida, el error del DELETE taparia el
+    del trozo, que es el que explica que paso.
+    """
+    try:
+        requests.delete(url, timeout=(15, 30))
+    except requests.exceptions.RequestException:
+        pass
 
 
 # --- volcado ---------------------------------------------------------------
@@ -575,6 +786,39 @@ def combinar(
     return previos + agregados, len(agregados)
 
 
+def _leer_remoto(crudo: bytes, nombre: str) -> list[Movimiento]:
+    """Lee el .xlsx que ya estaba en la carpeta, con un error entendible.
+
+    En una carpeta compartida de Administracion y Finanzas es muy posible que
+    ya haya un archivo con ese nombre que sea otra cosa: una copia de la base
+    de origen (que se llama igual), un export con la pestana 'Hoja1', o algo
+    que ni siquiera es un .xlsx. Sin esto el usuario recibe un KeyError o un
+    BadZipFile crudos, justo despues de que el script le bajo el archivo.
+    """
+    try:
+        return leer_movimientos(io.BytesIO(crudo))
+    except Exception as error:
+        raise RuntimeError(
+            f"El archivo {nombre!r} que ya esta en la carpeta no tiene el "
+            f"formato del extracto: {_describir_libro(crudo)}.\n"
+            "Renombralo en SharePoint, o corre el comando con "
+            "--nombre OTRO-NOMBRE.xlsx para no pisarlo."
+        ) from error
+
+
+def _describir_libro(crudo: bytes) -> str:
+    """Dice por que no se pudo leer: que hojas tiene, o que ni es un .xlsx."""
+    try:
+        libro = openpyxl.load_workbook(io.BytesIO(crudo), read_only=True)
+    except Exception:
+        return "no es un .xlsx valido"
+    try:
+        hojas = ", ".join(repr(h) for h in libro.sheetnames)
+    finally:
+        libro.close()
+    return f"no tiene la hoja {HOJA_DATOS!r}, tiene {hojas}"
+
+
 def volcar(
     cliente: ClienteGraph,
     carpeta: Carpeta,
@@ -588,7 +832,7 @@ def volcar(
     previos: list[Movimiento] = []
     if existente:
         crudo = descargar(cliente, carpeta, existente.id)
-        previos = leer_movimientos(io.BytesIO(crudo))
+        previos = _leer_remoto(crudo, nombre)
 
     todos, agregados = combinar(
         previos, movimientos, juego, respetar_categoria_existente
@@ -597,6 +841,17 @@ def volcar(
     # mas en el historial de SharePoint con el mismo contenido.
     if existente and not agregados:
         return ResumenVolcado(0, len(previos), carpeta.url_web)
+
+    if existente:
+        # El libro se regenera entero y se sube con conflictBehavior=replace:
+        # de lo que haya del lado de SharePoint solo sobreviven las 6 columnas
+        # de 'Cobranzas' (ver la tabla de diferencias del README).
+        print(
+            f"Aviso: {nombre} se reescribe entero. Las columnas, hojas o "
+            "formatos que alguien haya agregado en SharePoint se pierden; "
+            "las categorias corregidas a mano se conservan.",
+            flush=True,
+        )
 
     subido = subir(
         cliente,

@@ -273,7 +273,7 @@ export SP_CLIENT_ID=...
 export SP_CLIENT_SECRET=...
 
 python3 -m clasificador.cli volcar-sharepoint --drive-id 1IY5waCA...i13op \
-  --carpeta-url "https://achconstrucciones246.sharepoint.com/:f:/s/AdministracionyFinanzas/IgBz...?e=AcMGK2"
+  --carpeta-url "https://TUEMPRESA.sharepoint.com/:f:/s/TUSITIO/IgBxxxxxxxxxxxxxxxxxxxxx?e=XXXXXX"
 ```
 
 El archivo que queda en la carpeta es un `.xlsx` normal: hoja **Cobranzas** con
@@ -293,7 +293,7 @@ python3 -m clasificador.cli vincular-sharepoint "https://...:f:/s/..."
 #   item-id : 01ABC...
 
 python3 -m clasificador.cli volcar-sharepoint Extractos_cobranzas.xlsx \
-  --sitio achconstrucciones246.sharepoint.com:/sites/AdministracionyFinanzas \
+  --sitio TUEMPRESA.sharepoint.com:/sites/TUSITIO \
   --subcarpeta "Documentos compartidos/Extractos"
 ```
 
@@ -329,7 +329,7 @@ identidad.
    ```powershell
    Grant-PnPAzureADAppSitePermission -AppId <client-id> `
      -DisplayName "extractos-cobranza" -Permissions Write `
-     -Site https://achconstrucciones246.sharepoint.com/sites/AdministracionyFinanzas
+     -Site https://TUEMPRESA.sharepoint.com/sites/TUSITIO
    ```
 
    o el equivalente por Graph:

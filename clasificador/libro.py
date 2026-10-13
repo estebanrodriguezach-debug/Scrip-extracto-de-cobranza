@@ -16,7 +16,7 @@ from __future__ import annotations
 import io
 
 import openpyxl
-from openpyxl.styles import Font
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from clasificador.excel import ENCABEZADOS, HOJA_DATOS, Movimiento
@@ -27,7 +27,19 @@ HOJA_LISTAS = "Listas"
 # las filas que alguien agregue a mano quedarian sin validacion.
 FILAS_MINIMAS_DESPLEGABLE = 5000
 
-ANCHOS = {"A": 12, "B": 16, "C": 14, "D": 60, "E": 40, "F": 24}
+# Tomados del Extractos_cobranzas.xlsx que se venia usando, para que el
+# archivo generado se vea igual al de antes y no apenas parecido. La B no
+# estaba fijada en el original, asi que se deja en el ancho por defecto.
+ANCHOS = {"A": 12.0, "C": 15.0, "D": 60.0, "E": 30.0, "F": 38.0}
+
+# Encabezado del original: Calibri 11 en negrita, blanco sobre azul oscuro.
+COLOR_ENCABEZADO = "FF1F4E78"
+COLOR_TEXTO_ENCABEZADO = "FFFFFFFF"
+
+# El original guarda las fechas en mm-dd-yy. Es ambiguo de leer, pero cambiarlo
+# haria que el archivo se vea distinto al que el equipo viene mirando.
+FORMATO_FECHA = "mm-dd-yy"
+FORMATO_IMPORTE = "#,##0.00"
 
 
 def _fila(mov: Movimiento) -> list[object]:
@@ -71,7 +83,11 @@ def armar_libro(
 
     validacion = DataValidation(
         type="list",
-        formula1=f"={HOJA_LISTAS}!$A$1:$A${len(categorias)}",
+        # Sin el '=' adelante: en OOXML el contenido de <formula1> es la formula
+        # pelada y openpyxl la escribe verbatim. Con el '=' Excel de escritorio
+        # y Excel Online ofrecen reparar el archivo y descartan la validacion,
+        # que es justamente el desplegable que hay que conservar.
+        formula1=f"{HOJA_LISTAS}!$A$1:$A${len(categorias)}",
         allow_blank=True,
         # Trampa de OOXML: el atributo se llama showDropDown pero esta invertido,
         # en True ESCONDE la flechita. False es lo que muestra el desplegable.
@@ -85,13 +101,19 @@ def armar_libro(
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:F{ws.max_row}"
+    relleno = PatternFill("solid", fgColor=COLOR_ENCABEZADO)
+    centrado = Alignment(horizontal="center", vertical="center")
     for celda in ws[1]:
-        celda.font = Font(bold=True)
+        celda.font = Font(
+            name="Calibri", size=11, bold=True, color=COLOR_TEXTO_ENCABEZADO
+        )
+        celda.fill = relleno
+        celda.alignment = centrado
     for columna, ancho in ANCHOS.items():
         ws.column_dimensions[columna].width = ancho
     for fila in ws.iter_rows(min_row=2, max_row=ws.max_row):
-        fila[0].number_format = "yyyy-mm-dd"
-        fila[2].number_format = "#,##0.00"
+        fila[0].number_format = FORMATO_FECHA
+        fila[2].number_format = FORMATO_IMPORTE
 
     buffer = io.BytesIO()
     libro.save(buffer)

@@ -116,7 +116,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="HOST:/sites/NOMBRE",
         help=(
             "Sitio por ruta, estable en el tiempo. Ej: "
-            "achconstrucciones246.sharepoint.com:/sites/AdministracionyFinanzas"
+            "contoso.sharepoint.com:/sites/Finanzas"
         ),
     )
     ps.add_argument(
@@ -197,7 +197,7 @@ def _partir_sitio(sitio: str) -> tuple[str, str]:
     if not hostname or not ruta_sitio:
         raise SystemExit(
             "--sitio va con el formato HOST:/sites/NOMBRE, por ejemplo\n"
-            "  achconstrucciones246.sharepoint.com:/sites/AdministracionyFinanzas"
+            "  contoso.sharepoint.com:/sites/Finanzas"
         )
     return hostname, ruta_sitio
 
@@ -214,8 +214,7 @@ def _carpeta_sharepoint(args, cliente):
     )
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+def _ejecutar(args) -> int:
     juego = cargar_reglas(args.reglas)
 
     if args.comando == "probar":
@@ -290,6 +289,18 @@ def main(argv: list[str] | None = None) -> int:
     resumen = planilla.reclasificar(solo_vacias=not args.pisar_manuales)
     print(f"Reclasificadas: {resumen.reclasificados}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        return _ejecutar(args)
+    except (RuntimeError, OSError) as e:
+        # Los mensajes de sharepoint.py ya vienen escritos para el que corre
+        # esto, con el permiso que falta y quien lo concede. Un traceback de 14
+        # lineas arriba los esconde y parece que el programa se rompio.
+        print(e, file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
