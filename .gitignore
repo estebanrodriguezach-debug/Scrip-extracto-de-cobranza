@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Datos y credenciales: nunca al repo
+*.xlsx
+*.xls
+*.csv
+credenciales*.json
+service-account*.json
+.env

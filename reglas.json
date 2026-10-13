@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "descripcion": "Reglas de clasificacion de cobranzas. Se aplican EN ORDEN sobre el campo Detalle normalizado (minusculas, sin acentos, espacios colapsados). Gana la primera que coincide; si ninguna coincide se usa 'categoria_por_defecto'.",
+  "campo_origen": "detalle",
+  "categoria_por_defecto": "Cobranza cartera planes",
+  "categoria_sin_dato": "Cobranza cartera planes",
+  "categorias_validas": [
+    "Cobranza cartera planes",
+    "Cobranza cartera planes (cuota 1)",
+    "Adelantos clientes planes",
+    "Saldo cancelatorio",
+    "Cobranza financiamiento clientes (pagaré)",
+    "Ventas Directas",
+    "Adjudicaciones",
+    "Cambio estructuras u otras modificaciones",
+    "Sin clasificar"
+  ],
+  "reglas": [
+    {
+      "id": "pagare",
+      "categoria": "Cobranza financiamiento clientes (pagaré)",
+      "contiene": [
+        "pagare"
+      ],
+      "comentario": "52 filas en la base original."
+    },
+    {
+      "id": "cuota_1",
+      "categoria": "Cobranza cartera planes (cuota 1)",
+      "contiene": [
+        "cuota 1"
+      ],
+      "comentario": "Gana sobre 'base clientes' (ej. 'cuota 1 / base clientes')."
+    },
+    {
+      "id": "venta_directa",
+      "categoria": "Ventas Directas",
+      "contiene": [
+        "directa"
+      ],
+      "comentario": "Gana sobre 'saldo' y 'base cliente' (ej. 'saldo directa', 'directa / BASE CLIENTE')."
+    },
+    {
+      "id": "adjudicacion",
+      "categoria": "Adjudicaciones",
+      "contiene": [
+        "adjudicacion"
+      ]
+    },
+    {
+      "id": "cambio_estructuras",
+      "categoria": "Cambio estructuras u otras modificaciones",
+      "contiene": [
+        "presupuesto",
+        "modificacion"
+      ],
+      "comentario": "Ojo: 'modificar en ficha' NO entra aca (en la base original quedo como cartera planes)."
+    },
+    {
+      "id": "saldo_cancelatorio",
+      "categoria": "Saldo cancelatorio",
+      "contiene": [
+        "multa"
+      ],
+      "comentario": "Ver README: 'saldo' solo es ambiguo en la base original y por eso no se usa como palabra clave."
+    },
+    {
+      "id": "adelantos",
+      "categoria": "Adelantos clientes planes",
+      "contiene": [
+        "adelanto"
+      ],
+      "comentario": "Categoria existente en la lista pero sin uso en la base original."
+    }
+  ]
+}
