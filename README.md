@@ -68,26 +68,73 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Credenciales de Google (cuenta de servicio)
+## Credenciales de Google
 
-1. En [Google Cloud Console](https://console.cloud.google.com/) creá (o elegí)
-   un proyecto.
-2. **APIs y servicios → Biblioteca** → habilitá **Google Sheets API**.
-3. **APIs y servicios → Credenciales → Crear credenciales → Cuenta de
-   servicio**. Creada la cuenta, entrá a **Claves → Agregar clave → JSON** y
-   descargá el archivo.
-4. Copiá el mail de la cuenta de servicio (`algo@proyecto.iam.gserviceaccount.com`).
-5. Abrí tu planilla de Google y **compartila con ese mail, como Editor**.
-6. Guardá el JSON **fuera del repo** (el `.gitignore` ya lo bloquea) y exportá:
+Proyecto de Google Cloud: **ACH FACTURACION** (`tranquil-wave-503300-d6`).
+
+### Opción A — Cloud Shell (la más rápida, sin claves)
+
+Cloud Shell ya está autenticada con tu usuario, así que **no hace falta crear
+una cuenta de servicio ni descargar ningún JSON**. Desde la Cloud Shell del
+proyecto:
 
 ```bash
-export GOOGLE_APPLICATION_CREDENTIALS=/ruta/a/credenciales.json
+git clone https://github.com/estebanrodriguezach-debug/Scrip-extracto-de-cobranza.git
+cd Scrip-extracto-de-cobranza
+git checkout claude/cool-hawking-m31d63
+bash scripts/setup_cloudshell.sh
 ```
+
+Eso fija el proyecto, habilita **Google Sheets API** y **Google Drive API**, y
+arma el entorno de Python. Después, el único paso manual (te va a dar un link
+para autorizar):
+
+```bash
+gcloud auth application-default login \
+  --scopes=https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/drive.file,https://www.googleapis.com/auth/cloud-platform
+```
+
+Subí el `.xlsx` a Cloud Shell con **⋮ → Subir** (menú de la terminal) y listo.
+
+### Opción B — Cuenta de servicio (para dejarlo corriendo solo)
+
+Si más adelante querés automatizarlo (Cloud Scheduler, un cron, un servidor),
+conviene una cuenta de servicio, porque no depende de tu sesión:
+
+```bash
+gcloud config set project tranquil-wave-503300-d6
+gcloud services enable sheets.googleapis.com drive.googleapis.com
+
+gcloud iam service-accounts create cobranzas-sheets \
+  --display-name="Volcado de cobranzas a Sheets"
+
+gcloud iam service-accounts keys create ~/credenciales-cobranzas.json \
+  --iam-account=cobranzas-sheets@tranquil-wave-503300-d6.iam.gserviceaccount.com
+```
+
+Después **compartí la planilla como Editor** con
+`cobranzas-sheets@tranquil-wave-503300-d6.iam.gserviceaccount.com` (una cuenta
+de servicio no ve nada de tu Drive hasta que se lo compartís) y exportá:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=~/credenciales-cobranzas.json
+```
+
+> El JSON de la clave es una credencial: guardalo fuera del repo. El
+> `.gitignore` ya bloquea `credenciales*.json` y `service-account*.json`.
 
 El ID de la planilla es el tramo de la URL entre `/d/` y `/edit`:
 `https://docs.google.com/spreadsheets/d/`**`1AbC...xyz`**`/edit`.
 
 ## Uso
+
+**Crear la planilla ya preparada** (hojas, encabezado y desplegable):
+
+```bash
+python3 -m clasificador.cli crear --titulo "Extractos de cobranzas"
+```
+
+Te devuelve la URL y el ID. Si ya tenés una planilla, saltealo y usá su ID.
 
 **Volcar el Excel a la planilla y clasificar:**
 
@@ -187,6 +234,7 @@ clasificador/cli.py              # línea de comandos
 apps_script/Codigo.plantilla.gs  # plantilla editable del Apps Script
 apps_script/Codigo.gs            # generado — pegar en la planilla
 scripts/generar_apps_script.py   # plantilla + reglas.json -> Codigo.gs
+scripts/setup_cloudshell.sh      # deja Cloud Shell listo para correrlo
 scripts/validar_contra_excel.py  # compara reglas vs. el Excel real
 tests/                           # casos compartidos Python / Apps Script
 ```

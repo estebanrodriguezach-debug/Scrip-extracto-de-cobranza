@@ -1,7 +1,13 @@
 """Volcado y clasificacion de movimientos en una planilla de Google Sheets.
 
-Autenticacion: cuenta de servicio (recomendado para correr desatendido) o
-credenciales OAuth de usuario. Ver README.
+Autenticacion, en este orden:
+
+1. Ruta explicita a un JSON de cuenta de servicio (``--credenciales``).
+2. ``GOOGLE_APPLICATION_CREDENTIALS``, si apunta a un JSON de cuenta de servicio.
+3. Credenciales por defecto del entorno (ADC). Es lo que usa Cloud Shell: ya
+   estas logueado con tu usuario, no hace falta ninguna clave.
+
+Ver README.
 """
 
 from __future__ import annotations
@@ -11,13 +17,20 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+import google.auth
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 from clasificador.excel import ENCABEZADOS, Movimiento
 from clasificador.reglas import JuegoDeReglas
 
-ALCANCES = ["https://www.googleapis.com/auth/spreadsheets"]
+# ``drive.file`` solo da acceso a los archivos creados por esta app o que el
+# usuario le comparta explicitamente: alcanza para crear la planilla y no pide
+# permiso sobre todo el Drive.
+ALCANCES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.file",
+]
 
 HOJA_DATOS = "Cobranzas"
 HOJA_LISTAS = "Listas"
@@ -27,14 +40,35 @@ COL_DETALLE = 5  # E, 1-based
 
 def _credenciales(ruta_cuenta_servicio: str | Path | None = None):
     ruta = ruta_cuenta_servicio or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if not ruta:
-        raise RuntimeError(
-            "Falta la credencial. Pasa --credenciales o exporta "
-            "GOOGLE_APPLICATION_CREDENTIALS con el JSON de la cuenta de servicio."
+    if ruta:
+        return service_account.Credentials.from_service_account_file(
+            str(ruta), scopes=ALCANCES
         )
-    return service_account.Credentials.from_service_account_file(
-        str(ruta), scopes=ALCANCES
-    )
+    try:
+        credenciales, _ = google.auth.default(scopes=ALCANCES)
+    except google.auth.exceptions.DefaultCredentialsError as error:
+        raise RuntimeError(
+            "No encontre credenciales. Opciones:\n"
+            "  - En Cloud Shell o en tu maquina: "
+            "gcloud auth application-default login --scopes="
+            "https://www.googleapis.com/auth/spreadsheets,"
+            "https://www.googleapis.com/auth/drive.file,"
+            "https://www.googleapis.com/auth/cloud-platform\n"
+            "  - O pasa --credenciales con el JSON de una cuenta de servicio."
+        ) from error
+    return credenciales
+
+
+def crear_planilla(
+    titulo: str, credenciales_json: str | Path | None = None
+) -> tuple[str, str]:
+    """Crea una planilla vacia y devuelve (id, url)."""
+    api = build("sheets", "v4", credentials=_credenciales(credenciales_json)).spreadsheets()
+    resp = api.create(
+        body={"properties": {"title": titulo}},
+        fields="spreadsheetId,spreadsheetUrl",
+    ).execute()
+    return resp["spreadsheetId"], resp["spreadsheetUrl"]
 
 
 def _clave_con_ocurrencia(movimientos: list[Movimiento]) -> list[str]:

@@ -45,6 +45,12 @@ def _parser() -> argparse.ArgumentParser:
         help="Tambien recalcula filas que ya tienen categoria cargada.",
     )
 
+    pc = sub.add_parser("crear", help="Crea una planilla nueva y la deja preparada.")
+    pc.add_argument(
+        "--titulo", default="Extractos de cobranzas", help="Nombre de la planilla."
+    )
+    pc.add_argument("--credenciales")
+
     pp = sub.add_parser(
         "probar", help="Clasifica un texto de Detalle sin tocar nada (para probar reglas)."
     )
@@ -62,7 +68,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{texto!r:50} -> {r.categoria}   [regla: {r.regla_id}]")
         return 0
 
-    from clasificador.sheets import PlanillaCobranzas  # import perezoso: necesita red
+    # imports perezosos: necesitan las libs de Google y red
+    from clasificador.sheets import PlanillaCobranzas, crear_planilla
+
+    if args.comando == "crear":
+        id_planilla, url = crear_planilla(args.titulo, args.credenciales)
+        PlanillaCobranzas(id_planilla, juego, args.credenciales).preparar()
+        print(f"Planilla creada: {url}")
+        print(f"ID: {id_planilla}")
+        return 0
 
     planilla = PlanillaCobranzas(
         args.planilla, juego, args.credenciales, hoja=args.hoja
