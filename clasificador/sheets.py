@@ -60,15 +60,33 @@ def _credenciales(ruta_cuenta_servicio: str | Path | None = None):
 
 
 def crear_planilla(
-    titulo: str, credenciales_json: str | Path | None = None
+    titulo: str,
+    credenciales_json: str | Path | None = None,
+    compartir_con: str | None = None,
 ) -> tuple[str, str]:
-    """Crea una planilla vacia y devuelve (id, url)."""
-    api = build("sheets", "v4", credentials=_credenciales(credenciales_json)).spreadsheets()
+    """Crea una planilla vacia y devuelve (id, url).
+
+    ``compartir_con``: mail al que darle permiso de edicion. Es obligatorio en
+    la practica cuando se usa una cuenta de servicio: la planilla nace en el
+    Drive de la cuenta de servicio, que no tiene interfaz web, asi que sin esto
+    no la podrias abrir desde el navegador.
+    """
+    credenciales = _credenciales(credenciales_json)
+    api = build("sheets", "v4", credentials=credenciales).spreadsheets()
     resp = api.create(
         body={"properties": {"title": titulo}},
         fields="spreadsheetId,spreadsheetUrl",
     ).execute()
-    return resp["spreadsheetId"], resp["spreadsheetUrl"]
+    id_planilla, url = resp["spreadsheetId"], resp["spreadsheetUrl"]
+
+    if compartir_con:
+        build("drive", "v3", credentials=credenciales).permissions().create(
+            fileId=id_planilla,
+            body={"type": "user", "role": "writer", "emailAddress": compartir_con},
+            sendNotificationEmail=False,
+        ).execute()
+
+    return id_planilla, url
 
 
 def _clave_con_ocurrencia(movimientos: list[Movimiento]) -> list[str]:

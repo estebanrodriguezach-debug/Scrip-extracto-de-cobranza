@@ -94,7 +94,17 @@ gcloud auth application-default login \
   --scopes=https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/drive.file,https://www.googleapis.com/auth/cloud-platform
 ```
 
-Subí el `.xlsx` a Cloud Shell con **⋮ → Subir** (menú de la terminal) y listo.
+Subí el `.xlsx` a Cloud Shell con **⋮ → Subir** (menú de la terminal). El
+archivo cae en tu home, así que movelo al proyecto:
+
+```bash
+mv ~/Extractos_cobranzas.xlsx ~/Scrip-extracto-de-cobranza/
+```
+
+> **Aviso de Google:** al correr `application-default login` vas a ver un
+> warning de que el scope `spreadsheets` *"will be blocked soon for the default
+> client ID"*. Hoy funciona igual, pero cuando eso se corte hay que pasar a la
+> Opción B (cuenta de servicio), que no depende del client ID de `gcloud`.
 
 ### Opción B — Cuenta de servicio (para dejarlo corriendo solo)
 
@@ -123,6 +133,11 @@ export GOOGLE_APPLICATION_CREDENTIALS=~/credenciales-cobranzas.json
 > El JSON de la clave es una credencial: guardalo fuera del repo. El
 > `.gitignore` ya bloquea `credenciales*.json` y `service-account*.json`.
 
+> **Ojo con `crear` y cuenta de servicio:** una planilla creada por la cuenta
+> de servicio nace en *su* Drive, que no tiene interfaz web — no la podrías
+> abrir. Usá `--compartir-con tu-mail@gmail.com` para que te la comparta como
+> editor, o creá la planilla a mano en tu Drive y pasale el ID a `volcar`.
+
 El ID de la planilla es el tramo de la URL entre `/d/` y `/edit`:
 `https://docs.google.com/spreadsheets/d/`**`1AbC...xyz`**`/edit`.
 
@@ -132,6 +147,10 @@ El ID de la planilla es el tramo de la URL entre `/d/` y `/edit`:
 
 ```bash
 python3 -m clasificador.cli crear --titulo "Extractos de cobranzas"
+
+# con cuenta de servicio, para poder abrirla despues:
+python3 -m clasificador.cli crear --titulo "Extractos de cobranzas" \
+  --compartir-con tu-mail@gmail.com
 ```
 
 Te devuelve la URL y el ID. Si ya tenés una planilla, saltealo y usá su ID.

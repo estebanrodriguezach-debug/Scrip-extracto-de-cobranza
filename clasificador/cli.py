@@ -50,6 +50,15 @@ def _parser() -> argparse.ArgumentParser:
         "--titulo", default="Extractos de cobranzas", help="Nombre de la planilla."
     )
     pc.add_argument("--credenciales")
+    pc.add_argument(
+        "--compartir-con",
+        metavar="MAIL",
+        help=(
+            "Mail al que darle permiso de edicion. Obligatorio en la practica "
+            "si usas una cuenta de servicio: si no, la planilla queda en el "
+            "Drive de la cuenta de servicio y no la podes abrir."
+        ),
+    )
 
     pp = sub.add_parser(
         "probar", help="Clasifica un texto de Detalle sin tocar nada (para probar reglas)."
@@ -72,7 +81,9 @@ def main(argv: list[str] | None = None) -> int:
     from clasificador.sheets import PlanillaCobranzas, crear_planilla
 
     if args.comando == "crear":
-        id_planilla, url = crear_planilla(args.titulo, args.credenciales)
+        id_planilla, url = crear_planilla(
+            args.titulo, args.credenciales, args.compartir_con
+        )
         PlanillaCobranzas(id_planilla, juego, args.credenciales).preparar()
         print(f"Planilla creada: {url}")
         print(f"ID: {id_planilla}")
