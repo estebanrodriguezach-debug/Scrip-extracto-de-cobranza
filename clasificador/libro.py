@@ -14,12 +14,20 @@ formato de una, tiene que cambiar el de la otra.
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from clasificador.excel import ENCABEZADOS, HOJA_DATOS, Movimiento
+from clasificador.excel import (
+    ENCABEZADOS,
+    HOJA_DATOS,
+    Movimiento,
+    claves_con_ocurrencia,
+    leer_movimientos,
+)
+from clasificador.reglas import JuegoDeReglas
 
 HOJA_LISTAS = "Listas"
 
@@ -118,3 +126,105 @@ def armar_libro(
     buffer = io.BytesIO()
     libro.save(buffer)
     return buffer.getvalue()
+
+
+def combinar(
+    previos: list[Movimiento],
+    nuevos: list[Movimiento],
+    juego: JuegoDeReglas,
+    respetar_categoria_existente: bool = True,
+) -> tuple[list[Movimiento], int]:
+    """Mezcla lo que ya esta en SharePoint con lo nuevo. Devuelve (todos, agregados).
+
+    Reemplaza al append incremental de Sheets: como el archivo se reescribe
+    entero, sin este merge cada corrida borraria las categorias corregidas a
+    mano. Funciona porque ``Movimiento.clave`` no depende de detalle ni de
+    categoria, justamente para que editarlas no duplique la fila.
+    """
+    presentes = set(claves_con_ocurrencia(previos))
+    agregados = []
+    for mov, clave in zip(nuevos, claves_con_ocurrencia(nuevos)):
+        if clave in presentes:
+            continue
+        if not (respetar_categoria_existente and mov.categoria):
+            mov.categoria = juego.clasificar(mov.detalle).categoria
+        agregados.append(mov)
+
+    # Los nuevos van al final, sin reordenar lo que ya estaba: es lo mismo que
+    # hace el append de Google Sheets, asi el archivo no se revuelve entero
+    # cada vez que se agregan tres filas.
+    return previos + agregados, len(agregados)
+
+
+def leer_libro_existente(crudo: bytes, nombre: str) -> list[Movimiento]:
+    """Lee el .xlsx que ya estaba en el destino, con un error entendible.
+
+    En una carpeta compartida de Administracion y Finanzas es muy posible que
+    ya haya un archivo con ese nombre que sea otra cosa: una copia de la base
+    de origen (que se llama igual), un export con la pestana 'Hoja1', o algo
+    que ni siquiera es un .xlsx. Sin esto el usuario recibe un KeyError o un
+    BadZipFile crudos, justo despues de que el script le bajo el archivo.
+    """
+    try:
+        return leer_movimientos(io.BytesIO(crudo))
+    except Exception as error:
+        raise RuntimeError(
+            f"El archivo {nombre!r} que ya esta en la carpeta no tiene el "
+            f"formato del extracto: {_describir_libro(crudo)}.\n"
+            "Renombralo en SharePoint, o corre el comando con "
+            "--nombre OTRO-NOMBRE.xlsx para no pisarlo."
+        ) from error
+
+
+def _describir_libro(crudo: bytes) -> str:
+    """Dice por que no se pudo leer: que hojas tiene, o que ni es un .xlsx."""
+    try:
+        libro = openpyxl.load_workbook(io.BytesIO(crudo), read_only=True)
+    except Exception:
+        return "no es un .xlsx valido"
+    try:
+        hojas = ", ".join(repr(h) for h in libro.sheetnames)
+    finally:
+        libro.close()
+    return f"no tiene la hoja {HOJA_DATOS!r}, tiene {hojas}"
+
+
+def volcar_en_carpeta(
+    carpeta: str | Path,
+    movimientos: list[Movimiento],
+    juego: JuegoDeReglas,
+    nombre: str = "Extractos_cobranzas.xlsx",
+    respetar_categoria_existente: bool = True,
+) -> tuple[Path, int, int]:
+    """Escribe el extracto en una carpeta del disco. Devuelve (ruta, agregados, previos).
+
+    Pensado para una carpeta de SharePoint sincronizada con OneDrive: el
+    archivo se guarda local y OneDrive lo sube solo. Evita todo el tramite de
+    Entra ID, que necesita que un administrador del tenant autorice la app.
+
+    Si el archivo ya esta, se lo lee primero y se mezclan los movimientos
+    nuevos, para no pisar las categorias corregidas a mano.
+    """
+    carpeta = Path(carpeta).expanduser()
+    if not carpeta.is_dir():
+        raise RuntimeError(
+            f"La carpeta {carpeta} no existe. Si es la de OneDrive, revisa que "
+            "la biblioteca de SharePoint este sincronizada y que la ruta sea la "
+            "que muestra el Explorador."
+        )
+
+    destino = carpeta / nombre
+    previos: list[Movimiento] = []
+    if destino.exists():
+        previos = leer_libro_existente(destino.read_bytes(), nombre)
+
+    todos, agregados = combinar(
+        previos, movimientos, juego, respetar_categoria_existente
+    )
+
+    # Se escribe a un temporal en la misma carpeta y recien despues se renombra:
+    # si no, OneDrive puede empezar a subir un archivo a medio escribir.
+    temporal = carpeta / f".{nombre}.tmp"
+    temporal.write_bytes(armar_libro(todos, juego.categorias_validas))
+    temporal.replace(destino)
+    return destino, agregados, len(previos)

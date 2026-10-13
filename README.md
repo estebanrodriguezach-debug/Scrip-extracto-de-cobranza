@@ -404,6 +404,40 @@ Dos detalles operativos:
 
 ---
 
+## Dejar el extracto en SharePoint vía OneDrive (lo más simple)
+
+Es el camino recomendado: **no necesita ningún permiso ni administrador**.
+
+1. En el navegador, abrí la biblioteca de SharePoint donde va el extracto y
+   tocá **Sincronizar**. La carpeta aparece en el Explorador, dentro de
+   `OneDrive - <tu empresa>`.
+2. Copiá esa ruta del Explorador.
+3. Corré:
+
+```bash
+python3 -m clasificador.cli volcar-carpeta \
+  --drive-id 1IY5waCA...i13op \
+  --carpeta "C:/Users/TU_USUARIO/OneDrive - TU EMPRESA/Administracion y Finanzas/Extractos"
+```
+
+El script lee Ingresos Bancarios, clasifica, escribe el
+`Extractos_cobranzas.xlsx` en esa carpeta y **OneDrive lo sube solo**.
+
+Detalles que importan:
+
+- **Es idempotente**: volver a correrlo con el mismo origen no duplica nada.
+- **No pisa las correcciones a mano**: si alguien cambia una categoría en la
+  planilla, se conserva. Funciona porque `Movimiento.clave` no depende de
+  `Detalle` ni de `Categoría`, así que editarlas no genera una fila nueva.
+  Para recalcular igual, usá `--reclasificar-todo`.
+- Se escribe primero a un `.tmp` en la misma carpeta y recién después se
+  renombra, para que OneDrive no empiece a subir un archivo a medio escribir.
+
+> Como corre en la PC que tiene OneDrive, ahí necesitás Python y las
+> credenciales de Google para leer el origen. Si preferís no instalar nada en
+> esa máquina, podés correrlo en Cloud Shell contra un `.xlsx` local y después
+> copiar el archivo a la carpeta sincronizada.
+
 ## Clasificación dentro de la planilla (Apps Script)
 
 Para que la planilla clasifique sola cuando alguien escribe una nota, sin

@@ -103,3 +103,57 @@ class TestFormatoDelLibro(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVolcarEnCarpeta(unittest.TestCase):
+    """El camino de OneDrive: escribir el extracto en una carpeta del disco."""
+
+    def setUp(self):
+        import tempfile
+
+        self.juego = cargar_reglas()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.carpeta = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def _volcar(self, movimientos, **kw):
+        from clasificador.libro import volcar_en_carpeta
+
+        return volcar_en_carpeta(self.carpeta, movimientos, self.juego, **kw)
+
+    def test_crea_el_archivo(self):
+        destino, agregados, previos = self._volcar(MOVIMIENTOS)
+        self.assertTrue(destino.exists())
+        self.assertEqual(destino.name, "Extractos_cobranzas.xlsx")
+        self.assertEqual((agregados, previos), (2, 0))
+
+    def test_es_idempotente(self):
+        """Volver a correrlo con el mismo origen no duplica filas."""
+        self._volcar(MOVIMIENTOS)
+        _, agregados, previos = self._volcar(MOVIMIENTOS)
+        self.assertEqual((agregados, previos), (0, 2))
+
+    def test_respeta_las_correcciones_a_mano(self):
+        """Lo que el contador corrige en la planilla no se puede pisar."""
+        destino, _, _ = self._volcar(MOVIMIENTOS)
+        libro = openpyxl.load_workbook(destino)
+        libro["Cobranzas"]["F2"] = "Saldo cancelatorio"
+        libro.save(destino)
+
+        self._volcar(MOVIMIENTOS)
+        ws = openpyxl.load_workbook(destino)["Cobranzas"]
+        self.assertEqual(ws["F2"].value, "Saldo cancelatorio")
+
+    def test_no_deja_el_temporal(self):
+        """Se escribe a un .tmp y se renombra, para que OneDrive no suba a medias."""
+        self._volcar(MOVIMIENTOS)
+        self.assertEqual(
+            [p.name for p in self.carpeta.iterdir()], ["Extractos_cobranzas.xlsx"]
+        )
+
+    def test_carpeta_inexistente_da_error_entendible(self):
+        from clasificador.libro import volcar_en_carpeta
+
+        with self.assertRaises(RuntimeError) as ctx:
+            volcar_en_carpeta(self.carpeta / "no-existe", MOVIMIENTOS, self.juego)
+        self.assertIn("OneDrive", str(ctx.exception))

@@ -155,6 +155,29 @@ def _parser() -> argparse.ArgumentParser:
     )
     pvs.add_argument("carpeta_url", help="Link de la carpeta compartida (':f:').")
 
+    pl = sub.add_parser(
+        "volcar-carpeta",
+        help="Escribe el extracto en una carpeta del disco (OneDrive sincronizado).",
+    )
+    origen_local = pl.add_mutually_exclusive_group(required=True)
+    origen_local.add_argument("excel", nargs="?", help="Ruta a un .xlsx local.")
+    origen_local.add_argument("--drive-id", metavar="ID", help="ID del .xlsx en Drive.")
+    pl.add_argument(
+        "--carpeta",
+        required=True,
+        help="Carpeta destino, normalmente la de SharePoint sincronizada con OneDrive.",
+    )
+    pl.add_argument("--nombre", default="Extractos_cobranzas.xlsx")
+    pl.add_argument("--credenciales", help="JSON de la cuenta de servicio de Google.")
+    pl.add_argument(
+        "--formato", choices=["auto", "ingresos", "cobranzas"], default="auto"
+    )
+    pl.add_argument(
+        "--reclasificar-todo",
+        action="store_true",
+        help="Ignora la categoria que ya trae el origen y la recalcula.",
+    )
+
     pp = sub.add_parser(
         "probar", help="Clasifica un texto de Detalle sin tocar nada (para probar reglas)."
     )
@@ -232,6 +255,23 @@ def _ejecutar(args) -> int:
         print(f"  drive-id: {carpeta.drive_id}")
         print(f"  item-id : {carpeta.item_id}")
         print(f"  url     : {carpeta.url_web}")
+        return 0
+
+    if args.comando == "volcar-carpeta":
+        from clasificador.libro import volcar_en_carpeta
+
+        movimientos, _ = _leer_origen(args)
+        destino, agregados, previos = volcar_en_carpeta(
+            args.carpeta,
+            movimientos,
+            juego,
+            nombre=args.nombre,
+            respetar_categoria_existente=not args.reclasificar_todo,
+        )
+        print(f"Agregados: {agregados} | Ya estaban: {previos}")
+        print(f"Escrito en {destino}")
+        if agregados:
+            print("OneDrive lo sube solo en unos segundos.")
         return 0
 
     if args.comando == "volcar-sharepoint":
