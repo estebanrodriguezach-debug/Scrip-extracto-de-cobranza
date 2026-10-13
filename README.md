@@ -189,12 +189,45 @@ Sheets API no puede leer un .xlsx, pero la Drive API lo descarga tal cual y
 pedirle permisos de edición a su dueño: alcanza con que esté compartido como
 **Lector** con quien corre el script.
 
-Si el `.xlsx` de origen tiene la hoja con otro nombre, pasá `--hoja-origen`:
+## El libro de origen: 105 hojas y cuatro layouts
 
-```bash
-python3 -m clasificador.cli volcar --drive-id 1IY5... --planilla 1AbC... \
-  --hoja-origen "Ingresos"
+`Ingresos Bancarios Clientes` tiene **una hoja por banco y por mes** (`Rio
+Enero`, `Macro Feb 26`, `Galicia oct`, `Patag Dic`...), y el formato **no es
+uniforme**:
+
+| Banco | Layout |
+|---|---|
+| Rio, Galicia, Macro, Frances | `A` extracto, `B` fecha, `C` importe, `D` contrato, `E` nombre, `F` detalle |
+| Patagonia | **las columnas se corren entre hojas** (en *Agosto 26* la fecha está en `D`, en *Octubre 26* en `C`) y el extracto ocupa dos columnas |
+| Roela | **dos tablas lado a lado**: cheques (`A` carga, `B` importe, `D` fecha del cheque, `F` tipo, `G` contrato, `H` nombre) y transferencias (`M` extracto, `N` fecha, `O` importe, `P` contrato, `Q` nombre, `R` detalle) |
+
+Por eso las columnas **se detectan por hoja** en vez de fijarse. Lo único
+constante en todo el libro es que *importe, contrato, nombre y detalle* van
+pegados a la derecha de la fecha; el bloque de cheques de Roela es la excepción
+y está declarada aparte en `clasificador/origen.py`.
+
+Dos detalles que se descubrieron contrastando contra el extracto ya clasificado:
+
+- En los cheques de Roela la fecha que vale es la de la **columna D** (fecha del
+  cheque), no la `A` en que se carga: `D` acierta el 92 % y `A` sólo el 14 %.
+- En Roela el extracto no tiene texto del banco, así que se usa el **nombre del
+  cliente**, igual que en la base original.
+
+### Fidelidad del circuito completo
+
+Leyendo el libro de origen, clasificando y comparando contra las 1760 filas ya
+clasificadas a mano del extracto:
+
 ```
+Movimientos leídos del origen:  11.162  (105 hojas)
+Filas del extracto reencontradas: 1726/1760  (98.1%)
+   Rio 100% · Galicia 100% · Macro 100% · Patagonia 100% · Roela 92% · Frances 83%
+Categoría coincidente:          1723/1726  (99.83%)
+```
+
+Las 3 diferencias de categoría son las mismas contradicciones de la base
+original ya documentadas (`SALDO` y `976125`). El 2 % de filas no reencontradas
+son cheques de Roela cargados con una fecha distinta a la del cheque.
 
 Crea las hojas `Cobranzas` y `Listas` si no existen, pone el encabezado, arma
 el desplegable de categorías, congela la fila 1 y agrega los movimientos.
@@ -283,12 +316,14 @@ reglas.json                      # única fuente de verdad de la clasificación
 clasificador/reglas.py           # motor de reglas
 clasificador/excel.py            # lectura del .xlsx
 clasificador/drive.py            # baja el .xlsx de origen desde Drive
+clasificador/origen.py           # lee el libro de Ingresos Bancarios (105 hojas)
 clasificador/sheets.py           # Google Sheets API (volcar / reclasificar)
 clasificador/cli.py              # línea de comandos
 apps_script/Codigo.plantilla.gs  # plantilla editable del Apps Script
 apps_script/Codigo.gs            # generado — pegar en la planilla
 scripts/generar_apps_script.py   # plantilla + reglas.json -> Codigo.gs
 scripts/setup_cloudshell.sh      # deja Cloud Shell listo para correrlo
+scripts/inspeccionar_origen.py   # muestra la estructura de un .xlsx de origen
 scripts/validar_contra_excel.py  # compara reglas vs. el Excel real
 tests/                           # casos compartidos Python / Apps Script
 ```

@@ -7,7 +7,6 @@ import sys
 
 from pathlib import Path
 
-from clasificador.excel import leer_movimientos
 from clasificador.reglas import cargar_reglas
 
 
@@ -37,9 +36,14 @@ def _parser() -> argparse.ArgumentParser:
         "--hoja", default="Cobranzas", help="Hoja destino en la planilla de Google."
     )
     pv.add_argument(
-        "--hoja-origen",
-        default="Cobranzas",
-        help="Nombre de la hoja a leer dentro del .xlsx de origen.",
+        "--formato",
+        choices=["auto", "ingresos", "cobranzas"],
+        default="auto",
+        help=(
+            "Formato del .xlsx de origen. 'ingresos' es el libro de Ingresos "
+            "Bancarios (una hoja por banco y mes); 'cobranzas' es el extracto "
+            "ya armado. Por defecto se detecta solo."
+        ),
     )
     pv.add_argument(
         "--reclasificar-todo",
@@ -113,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.comando == "volcar":
+        from clasificador.origen import leer
+
         if args.drive_id:
             from tempfile import TemporaryDirectory
 
@@ -123,11 +129,13 @@ def main(argv: list[str] | None = None) -> int:
                 ruta = descargar_xlsx(
                     args.drive_id, Path(tmp) / "origen.xlsx", args.credenciales
                 )
-                movimientos = leer_movimientos(ruta, hoja=args.hoja_origen)
+                movimientos, avisos = leer(ruta, args.formato)
             origen = f"Drive:{args.drive_id}"
         else:
-            movimientos = leer_movimientos(args.excel, hoja=args.hoja_origen)
+            movimientos, avisos = leer(args.excel, args.formato)
             origen = args.excel
+        for aviso in avisos:
+            print(f"  aviso: {aviso}")
         print(f"Leidos {len(movimientos)} movimientos de {origen}")
         if not args.sin_preparar:
             planilla.preparar()
