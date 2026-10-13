@@ -41,6 +41,12 @@ ROELA_CHEQUES = {"fecha": 3, "importe": 1, "detalle": 5, "contrato": 6, "nombre"
 
 FILAS_MUESTRA = 400
 
+# Un año tipeado mal pasa desapercibido: la fila entra igual, con una fecha
+# absurda, y el extracto queda ordenado de forma rara. Pasado este margen se
+# avisa, pero la fila se conserva: no es el script quien decide tirar datos.
+ANIO_MINIMO = 2020
+ANIOS_DE_MARGEN = 2
+
 
 def _sin_acentos(texto: str) -> str:
     return "".join(
@@ -203,6 +209,15 @@ def leer_libro(ruta: str | Path) -> tuple[list[Movimiento], list[str]]:
                         # Los cheques de Roela no traen texto del banco: el
                         # extracto original usa el nombre del cliente.
                         extracto = nombre
+
+                    if not (
+                        ANIO_MINIMO <= fecha.year <= dt.date.today().year + ANIOS_DE_MARGEN
+                    ):
+                        avisos.append(
+                            f"Hoja {ws.title!r}: la fecha {fecha.date()} no parece "
+                            "real, revisa esa fila en el archivo de origen. "
+                            "La dejo igual, sin corregir."
+                        )
 
                     movimientos.append(
                         Movimiento(
