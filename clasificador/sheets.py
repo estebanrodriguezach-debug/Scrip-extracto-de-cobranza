@@ -24,13 +24,18 @@ from googleapiclient.discovery import build
 from clasificador.excel import ENCABEZADOS, Movimiento
 from clasificador.reglas import JuegoDeReglas
 
-# ``drive.file`` solo da acceso a los archivos creados por esta app o que el
-# usuario le comparta explicitamente: alcanza para crear la planilla y no pide
-# permiso sobre todo el Drive.
+# ``drive.file`` solo da acceso a los archivos creados por esta app: alcanza
+# para crear la planilla destino y no pide permiso sobre todo el Drive.
 ALCANCES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
 ]
+
+# Leer un .xlsx que vive en Drive y que NO creo esta app (el que le comparten a
+# la cuenta de servicio) necesita este alcance aparte. Se pide solo cuando hace
+# falta: para una cuenta de servicio alcanza unicamente los archivos que le
+# compartieron, pero con tu usuario cubriria todo tu Drive.
+ALCANCE_LECTURA_DRIVE = "https://www.googleapis.com/auth/drive.readonly"
 
 HOJA_DATOS = "Cobranzas"
 HOJA_LISTAS = "Listas"
@@ -38,22 +43,25 @@ COL_CATEGORIA = 6  # F, 1-based
 COL_DETALLE = 5  # E, 1-based
 
 
-def _credenciales(ruta_cuenta_servicio: str | Path | None = None):
+def _credenciales(
+    ruta_cuenta_servicio: str | Path | None = None,
+    leer_drive: bool = False,
+):
+    alcances = list(ALCANCES) + ([ALCANCE_LECTURA_DRIVE] if leer_drive else [])
     ruta = ruta_cuenta_servicio or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if ruta:
         return service_account.Credentials.from_service_account_file(
-            str(ruta), scopes=ALCANCES
+            str(ruta), scopes=alcances
         )
     try:
-        credenciales, _ = google.auth.default(scopes=ALCANCES)
+        credenciales, _ = google.auth.default(scopes=alcances)
     except google.auth.exceptions.DefaultCredentialsError as error:
         raise RuntimeError(
             "No encontre credenciales. Opciones:\n"
             "  - En Cloud Shell o en tu maquina: "
             "gcloud auth application-default login --scopes="
-            "https://www.googleapis.com/auth/spreadsheets,"
-            "https://www.googleapis.com/auth/drive.file,"
-            "https://www.googleapis.com/auth/cloud-platform\n"
+            + ",".join(alcances)
+            + ",https://www.googleapis.com/auth/cloud-platform\n"
             "  - O pasa --credenciales con el JSON de una cuenta de servicio."
         ) from error
     return credenciales

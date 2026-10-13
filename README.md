@@ -108,8 +108,21 @@ mv ~/Extractos_cobranzas.xlsx ~/Scrip-extracto-de-cobranza/
 
 ### Opción B — Cuenta de servicio (para dejarlo corriendo solo)
 
-Si más adelante querés automatizarlo (Cloud Scheduler, un cron, un servidor),
-conviene una cuenta de servicio, porque no depende de tu sesión:
+En el proyecto **ya existe** `lector-facturas@tranquil-wave-503300-d6.iam.gserviceaccount.com`,
+con permiso de **Lector** sobre el archivo de ingresos bancarios. Se puede
+reutilizar para el origen; sólo hace falta una clave:
+
+```bash
+gcloud iam service-accounts keys create ~/credenciales-cobranzas.json \
+  --iam-account=lector-facturas@tranquil-wave-503300-d6.iam.gserviceaccount.com
+export GOOGLE_APPLICATION_CREDENTIALS=~/credenciales-cobranzas.json
+```
+
+Con eso **lee** el origen. Para **escribir** en la planilla destino, esa cuenta
+necesita además permiso de **Editor** sobre ella: o le compartís la planilla a
+ese mail, o la creás con `crear --compartir-con`.
+
+Si preferís una cuenta aparte, sólo para esto:
 
 ```bash
 gcloud config set project tranquil-wave-503300-d6
@@ -160,6 +173,27 @@ Te devuelve la URL y el ID. Si ya tenés una planilla, saltealo y usá su ID.
 ```bash
 python3 -m clasificador.cli volcar Extractos_cobranzas.xlsx \
   --planilla 1AbC...xyz
+```
+
+**Leyendo el origen directo de Drive**, sin bajarlo a mano:
+
+```bash
+python3 -m clasificador.cli volcar --drive-id 1IY5waCAZUoD-UEzArucVbQ2q_Vsi13op \
+  --planilla 1AbC...xyz
+```
+
+Esto sirve para el caso real: el archivo fuente (*Ingresos Bancarios Clientes
+2025-2026.xlsx*) vive en Drive como **.xlsx, no como planilla nativa**. La
+Sheets API no puede leer un .xlsx, pero la Drive API lo descarga tal cual y
+`openpyxl` lo abre igual. Así **no hay que convertir el archivo original** ni
+pedirle permisos de edición a su dueño: alcanza con que esté compartido como
+**Lector** con quien corre el script.
+
+Si el `.xlsx` de origen tiene la hoja con otro nombre, pasá `--hoja-origen`:
+
+```bash
+python3 -m clasificador.cli volcar --drive-id 1IY5... --planilla 1AbC... \
+  --hoja-origen "Ingresos"
 ```
 
 Crea las hojas `Cobranzas` y `Listas` si no existen, pone el encabezado, arma
@@ -248,6 +282,7 @@ el de Apps Script, así los dos clasificadores no se pueden separar.
 reglas.json                      # única fuente de verdad de la clasificación
 clasificador/reglas.py           # motor de reglas
 clasificador/excel.py            # lectura del .xlsx
+clasificador/drive.py            # baja el .xlsx de origen desde Drive
 clasificador/sheets.py           # Google Sheets API (volcar / reclasificar)
 clasificador/cli.py              # línea de comandos
 apps_script/Codigo.plantilla.gs  # plantilla editable del Apps Script

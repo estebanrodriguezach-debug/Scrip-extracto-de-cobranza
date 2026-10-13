@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import sys
 
+from pathlib import Path
+
 from clasificador.excel import leer_movimientos
 from clasificador.reglas import cargar_reglas
 
@@ -18,10 +20,27 @@ def _parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="comando", required=True)
 
     pv = sub.add_parser("volcar", help="Sube el Excel a la planilla y clasifica.")
-    pv.add_argument("excel", help="Ruta al .xlsx de extractos.")
+    origen = pv.add_mutually_exclusive_group(required=True)
+    origen.add_argument("excel", nargs="?", help="Ruta a un .xlsx local.")
+    origen.add_argument(
+        "--drive-id",
+        metavar="ID",
+        help=(
+            "ID del .xlsx en Google Drive, en lugar de un archivo local. Es el "
+            "tramo de la URL entre /d/ y /edit (o /view). El archivo tiene que "
+            "estar compartido con quien corre esto (alcanza con Lector)."
+        ),
+    )
     pv.add_argument("--planilla", required=True, help="ID de la planilla de Google.")
     pv.add_argument("--credenciales", help="JSON de la cuenta de servicio.")
-    pv.add_argument("--hoja", default="Cobranzas")
+    pv.add_argument(
+        "--hoja", default="Cobranzas", help="Hoja destino en la planilla de Google."
+    )
+    pv.add_argument(
+        "--hoja-origen",
+        default="Cobranzas",
+        help="Nombre de la hoja a leer dentro del .xlsx de origen.",
+    )
     pv.add_argument(
         "--reclasificar-todo",
         action="store_true",
@@ -94,8 +113,22 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.comando == "volcar":
-        movimientos = leer_movimientos(args.excel)
-        print(f"Leidos {len(movimientos)} movimientos de {args.excel}")
+        if args.drive_id:
+            from tempfile import TemporaryDirectory
+
+            from clasificador.drive import descargar_xlsx
+
+            with TemporaryDirectory() as tmp:
+                print(f"Descargando {args.drive_id} de Drive...")
+                ruta = descargar_xlsx(
+                    args.drive_id, Path(tmp) / "origen.xlsx", args.credenciales
+                )
+                movimientos = leer_movimientos(ruta, hoja=args.hoja_origen)
+            origen = f"Drive:{args.drive_id}"
+        else:
+            movimientos = leer_movimientos(args.excel, hoja=args.hoja_origen)
+            origen = args.excel
+        print(f"Leidos {len(movimientos)} movimientos de {origen}")
         if not args.sin_preparar:
             planilla.preparar()
         resumen = planilla.volcar(
