@@ -177,6 +177,16 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ignora la categoria que ya trae el origen y la recalcula.",
     )
+    pl.add_argument(
+        "--desde",
+        metavar="AAAA-MM-DD",
+        help="Ignora los movimientos anteriores a esta fecha.",
+    )
+    pl.add_argument(
+        "--hasta",
+        metavar="AAAA-MM-DD",
+        help="Ignora los movimientos posteriores a esta fecha.",
+    )
 
     pp = sub.add_parser(
         "probar", help="Clasifica un texto de Detalle sin tocar nada (para probar reglas)."
@@ -261,6 +271,7 @@ def _ejecutar(args) -> int:
         from clasificador.libro import volcar_en_carpeta
 
         movimientos, _ = _leer_origen(args)
+        movimientos = _filtrar_por_fecha(movimientos, args.desde, args.hasta)
         destino, agregados, previos = volcar_en_carpeta(
             args.carpeta,
             movimientos,
@@ -329,6 +340,32 @@ def _ejecutar(args) -> int:
     resumen = planilla.reclasificar(solo_vacias=not args.pisar_manuales)
     print(f"Reclasificadas: {resumen.reclasificados}")
     return 0
+
+
+def _filtrar_por_fecha(movimientos, desde: str | None, hasta: str | None):
+    """Acota el rango del origen.
+
+    El libro de origen arranca en enero de 2025, mucho antes que el extracto
+    que se viene usando. Sin esto, la primera corrida le mete al archivo todos
+    los movimientos viejos de golpe.
+    """
+    import datetime as dt
+
+    def _fecha(texto: str, flag: str) -> dt.date:
+        try:
+            return dt.date.fromisoformat(texto)
+        except ValueError:
+            raise SystemExit(f"{flag} tiene que ser AAAA-MM-DD, no {texto!r}.")
+
+    if desde:
+        limite = _fecha(desde, "--desde")
+        movimientos = [m for m in movimientos if m.fecha and m.fecha >= limite]
+    if hasta:
+        limite = _fecha(hasta, "--hasta")
+        movimientos = [m for m in movimientos if m.fecha and m.fecha <= limite]
+    if desde or hasta:
+        print(f"Filtrados por fecha: quedan {len(movimientos)} movimientos")
+    return movimientos
 
 
 def main(argv: list[str] | None = None) -> int:
