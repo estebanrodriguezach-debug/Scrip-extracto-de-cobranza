@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import IO
 
 import openpyxl
 
@@ -75,7 +77,30 @@ def _a_importe(valor: object) -> float | None:
     return float(limpio) if limpio else None
 
 
-def leer_movimientos(ruta: str | Path, hoja: str = HOJA_DATOS) -> list[Movimiento]:
+def claves_con_ocurrencia(movimientos: list[Movimiento]) -> list[str]:
+    """Desambigua movimientos identicos (misma fecha, banco, importe y texto).
+
+    En la base real hay 48 pares asi: son cobros repetidos legitimos, no
+    duplicados a descartar. Se numeran para que el volcado sea idempotente sin
+    perderlos. Lo usan los dos destinos (Google Sheets y SharePoint), por eso
+    vive aca y no en uno de ellos.
+    """
+    vistos: Counter[str] = Counter()
+    claves = []
+    for mov in movimientos:
+        vistos[mov.clave] += 1
+        claves.append(f"{mov.clave}#{vistos[mov.clave]}")
+    return claves
+
+
+def leer_movimientos(
+    ruta: str | Path | IO[bytes], hoja: str = HOJA_DATOS
+) -> list[Movimiento]:
+    """Lee el extracto. ``ruta`` puede ser un archivo o un buffer en memoria.
+
+    Lo segundo es lo que usa SharePoint: el .xlsx se descarga a un BytesIO y se
+    lee sin tocar el disco.
+    """
     libro = openpyxl.load_workbook(ruta, data_only=True, read_only=True)
     try:
         ws = libro[hoja]

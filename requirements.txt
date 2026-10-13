@@ -1,3 +1,7 @@
 openpyxl>=3.1
 google-api-python-client>=2.120
 google-auth>=2.28
+# Solo para el destino SharePoint (volcar-sharepoint). requests entra con el
+# stack de Google, asi que esto agrega msal y pyjwt y nada mas.
+msal>=1.39
+requests>=2.31

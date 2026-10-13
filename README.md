@@ -1,7 +1,7 @@
-# Extracto de cobranzas → Google Sheets
+# Extracto de cobranzas → Google Sheets / SharePoint
 
-Vuelca la base `Extractos_cobranzas.xlsx` a una planilla de Google y clasifica
-cada movimiento **con las mismas reglas que se venían aplicando a mano**.
+Vuelca la base `Extractos_cobranzas.xlsx` a una planilla de Google (o a una
+carpeta de SharePoint) y clasifica cada movimiento **con las mismas reglas que se venían aplicando a mano**.
 
 Las reglas viven en un único archivo, [`reglas.json`](reglas.json), que usan
 tanto el script de Python como el Apps Script que corre dentro de la planilla.
@@ -262,6 +262,148 @@ python3 -m clasificador.cli probar "pagare" "saldo directa" "cuota 1"
 
 ---
 
+## Volcar a SharePoint
+
+El mismo extracto, con el mismo formato, pero dentro de una carpeta de
+SharePoint en lugar de (o además de) Google Sheets:
+
+```bash
+export SP_TENANT_ID=c9519bc6-8190-4466-a0d7-d30d923582b7
+export SP_CLIENT_ID=...
+export SP_CLIENT_SECRET=...
+
+python3 -m clasificador.cli volcar-sharepoint --drive-id 1IY5waCA...i13op \
+  --carpeta-url "https://achconstrucciones246.sharepoint.com/:f:/s/AdministracionyFinanzas/IgBz...?e=AcMGK2"
+```
+
+El archivo que queda en la carpeta es un `.xlsx` normal: hoja **Cobranzas** con
+las 6 columnas, hoja **Listas** con las categorías, **desplegable** sobre la
+columna `Categoría` y fila 1 congelada. Igual que la planilla de Google — de
+hecho es más fiel, porque el archivo se sube tal cual y SharePoint no lo toca.
+
+### El link caduca: vinculá una vez y usá la ruta del sitio
+
+El link compartido lleva un `?e=...` que se puede revocar o vencer. Para dejarlo
+en un cron conviene no depender de él:
+
+```bash
+python3 -m clasificador.cli vincular-sharepoint "https://...:f:/s/..."
+# Carpeta: Extractos
+#   drive-id: b!xxxx
+#   item-id : 01ABC...
+
+python3 -m clasificador.cli volcar-sharepoint Extractos_cobranzas.xlsx \
+  --sitio achconstrucciones246.sharepoint.com:/sites/AdministracionyFinanzas \
+  --subcarpeta "Documentos compartidos/Extractos"
+```
+
+La ruta del sitio no caduca. Además es el **único** camino que funciona con el
+permiso `Sites.Selected`: el endpoint `/shares`, que resuelve el link, no lo
+acepta.
+
+### Setup de Entra ID, paso a paso
+
+Todo esto se hace **una sola vez**. Los pasos 4 y 5 los tiene que hacer un
+administrador del tenant: no hay forma de evitarlo, el consentimiento de
+administrador es obligatorio para cualquier app que escriba con su propia
+identidad.
+
+1. Entrá a [entra.microsoft.com](https://entra.microsoft.com) → **Entra ID** →
+   **App registrations** → **New registration**. (Ya no se hace desde el portal
+   clásico de Azure.) Hace falta ser al menos *Application Developer*.
+2. Nombre: `extractos-cobranza`. En *Supported account types*, **Single tenant**.
+   El redirect URI se deja vacío.
+3. En **Overview** anotá *Application (client) ID* y *Directory (tenant) ID* →
+   son `SP_CLIENT_ID` y `SP_TENANT_ID`.
+4. **Certificates & secrets → New client secret**. El valor se muestra una sola
+   vez: es `SP_CLIENT_SECRET`. **Caduca** (6 o 24 meses según la política de la
+   empresa); cuando vence el script deja de andar sin aviso previo, así que
+   anotá la fecha. Si el admin lo permite, un certificado no caduca tan seguido.
+5. **API permissions → Add a permission → Microsoft Graph → Application
+   permissions → `Sites.Selected`**. Después, *Grant admin consent for \<tenant\>*.
+6. El grant por sitio, que es un segundo pedido al admin y el paso donde más
+   implementaciones quedan a mitad de camino. `Sites.Selected` por sí solo **no
+   da acceso a nada**: hay que habilitar la app sobre ese sitio puntual. Requiere
+   rol *SharePoint Administrator*:
+
+   ```powershell
+   Grant-PnPAzureADAppSitePermission -AppId <client-id> `
+     -DisplayName "extractos-cobranza" -Permissions Write `
+     -Site https://achconstrucciones246.sharepoint.com/sites/AdministracionyFinanzas
+   ```
+
+   o el equivalente por Graph:
+
+   ```http
+   POST https://graph.microsoft.com/v1.0/sites/{siteId}/permissions
+   {"roles":["write"],
+    "grantedToIdentities":[{"application":{"id":"<client-id>","displayName":"extractos-cobranza"}}]}
+   ```
+
+**Por qué `Sites.Selected` y no `Sites.ReadWrite.All` o `Files.ReadWrite.All`:**
+esos dos le dan al script escritura sobre **todos** los sitios y archivos de la
+empresa. `Sites.Selected` arranca sin acceso a nada y el admin lo habilita sólo
+sobre Administración y Finanzas, revocable con un `DELETE`. Es el argumento que
+hace que seguridad diga que sí.
+
+### Sin secreto: device code
+
+Si no te dejan crear un client secret, dejá `SP_CLIENT_SECRET` sin definir. El
+script imprime un código, lo pegás en
+[microsoft.com/devicelogin](https://microsoft.com/devicelogin) y listo; el token
+queda cacheado en `~/.cache/cobranzas/token_sharepoint.json`. Requiere
+*Allow public client flows = Yes* en la pestaña **Authentication** de la app.
+
+**No sirve para un cron:** el refresh token caduca (ventana deslizante de ~90
+días) y se rompe con cualquier cambio de contraseña o política de acceso
+condicional. Y desde el cambio de defaults de Microsoft de 2025 (MC1097272), en
+la mayoría de los tenants este camino **también** pide consentimiento de
+administrador, así que no evita el trámite.
+
+### Si la organización bloquea el registro de apps
+
+Es muy común (`Users can register applications = No`). Opciones, de mejor a peor:
+
+1. **Que un admin te asigne el rol *Application Developer*.** Es el remedio que
+   documenta Microsoft y no concede nada más que eso.
+2. **Que el admin cree el registro y te agregue como *owner*.** Podés manejar
+   secretos y permisos sin poder crear apps nuevas.
+3. **Activar el *admin consent workflow*,** para pedir la aprobación desde el
+   propio flujo en vez de por mail.
+4. **Sin ninguna app: sincronizar la biblioteca con el cliente de OneDrive** y
+   escribir el `.xlsx` en la carpeta local que queda sincronizada. Cero API,
+   cero permisos, cero consentimiento, y el extracto aparece en la misma carpeta
+   con el mismo formato. Es menos elegante, pero si el tenant está cerrado es la
+   salida más rápida, y conviene tenerla sobre la mesa antes de pasar dos
+   semanas trabado en Entra.
+
+### Diferencias con el destino Google Sheets
+
+| | Google Sheets | SharePoint |
+|---|---|---|
+| Qué se escribe | filas nuevas, in situ | el archivo entero, de nuevo |
+| Categorías corregidas a mano | se respetan | se respetan (merge por clave) |
+| Columnas o hojas agregadas a mano | se conservan | **se pierden** |
+| Clasificación automática al escribir | sí (Apps Script) | no hay equivalente |
+
+Como el `.xlsx` se **regenera entero** en cada volcado, la hoja `Cobranzas` es
+territorio del script: lo único que sobrevive de las ediciones manuales es la
+columna `Categoría` (y el `Detalle`), porque antes de subir se baja el archivo
+que está en SharePoint y se mezcla por la misma clave que usa el volcado a
+Sheets — fecha + banco + importe + texto del extracto. Si alguien agrega una
+columna `G` con notas, una hoja aparte o un gráfico, el próximo volcado se lo
+lleva puesto.
+
+Dos detalles operativos:
+
+- Si alguien tiene el `.xlsx` abierto en **Excel de escritorio**, el archivo
+  queda bloqueado y la subida falla con `423`. El mensaje de error te lo dice:
+  hay que cerrarlo y reintentar.
+- Si el archivo cambió en SharePoint mientras corría el script, la subida falla
+  con `412` en lugar de pisar el cambio. Volvé a correr el comando y se mergea.
+
+---
+
 ## Clasificación dentro de la planilla (Apps Script)
 
 Para que la planilla clasifique sola cuando alguien escribe una nota, sin
@@ -318,6 +460,8 @@ clasificador/excel.py            # lectura del .xlsx
 clasificador/drive.py            # baja el .xlsx de origen desde Drive
 clasificador/origen.py           # lee el libro de Ingresos Bancarios (105 hojas)
 clasificador/sheets.py           # Google Sheets API (volcar / reclasificar)
+clasificador/libro.py            # arma el .xlsx del extracto con openpyxl
+clasificador/sharepoint.py       # Microsoft Graph (volcar a SharePoint)
 clasificador/cli.py              # línea de comandos
 apps_script/Codigo.plantilla.gs  # plantilla editable del Apps Script
 apps_script/Codigo.gs            # generado — pegar en la planilla

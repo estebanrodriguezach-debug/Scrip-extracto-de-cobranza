@@ -13,7 +13,6 @@ Ver README.
 from __future__ import annotations
 
 import os
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,7 +20,11 @@ import google.auth
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-from clasificador.excel import ENCABEZADOS, Movimiento
+from clasificador.excel import (
+    ENCABEZADOS,
+    Movimiento,
+    claves_con_ocurrencia as _clave_con_ocurrencia,
+)
 from clasificador.reglas import JuegoDeReglas
 
 # ``drive.file`` solo da acceso a los archivos creados por esta app: alcanza
@@ -95,21 +98,6 @@ def crear_planilla(
         ).execute()
 
     return id_planilla, url
-
-
-def _clave_con_ocurrencia(movimientos: list[Movimiento]) -> list[str]:
-    """Desambigua movimientos identicos (misma fecha, banco, importe y texto).
-
-    En la base real hay 48 pares asi: son cobros repetidos legitimos, no
-    duplicados a descartar. Se numeran para que el volcado sea idempotente sin
-    perderlos.
-    """
-    vistos: Counter[str] = Counter()
-    claves = []
-    for mov in movimientos:
-        vistos[mov.clave] += 1
-        claves.append(f"{mov.clave}#{vistos[mov.clave]}")
-    return claves
 
 
 @dataclass
