@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import sys
 import tempfile
@@ -130,3 +131,52 @@ class TestLeerCobranza(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnioObligatorio(unittest.TestCase):
+    """El CLI no corre sin año: apagar ese filtro en silencio costaba caro."""
+
+    def setUp(self):
+        self.cfg = cargar_config()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _base(self, filas):
+        ruta = fixtures.libro_cobranza(Path(self.tmp.name) / "c.xlsx", {"Enero": filas})
+        base, _ = leer_cobranza(ruta, self.cfg)
+        return base
+
+    def test_hoja_recien_armada_no_tiene_anio(self):
+        """Clientes y cuotas cargados, ningun cobro todavia."""
+        base = self._base([{"nombre": "Perez Juan", "contrato": 2161, "cuota": 15000}])
+        self.assertEqual(anio_de_base(base), 0)
+
+    def test_el_cli_corta_y_pide_el_anio(self):
+        from clasificador.cli import _anio_de
+
+        base = self._base([{"nombre": "Perez Juan", "contrato": 2161, "cuota": 15000}])
+        args = argparse.Namespace(anio=None)
+        with self.assertRaises(SystemExit) as e:
+            _anio_de(args, base)
+        self.assertIn("--anio", str(e.exception))
+
+    def test_el_anio_a_mano_manda(self):
+        from clasificador.cli import _anio_de
+
+        base = self._base([{"nombre": "Perez Juan", "contrato": 2161, "cuota": 15000}])
+        self.assertEqual(_anio_de(argparse.Namespace(anio=2026), base), 2026)
+
+    def test_con_fechas_lo_deduce_solo(self):
+        import datetime as dt
+
+        base = self._base(
+            [{"nombre": "Perez Juan", "contrato": 2161, "cuota": 15000,
+              "fecha_pago": dt.datetime(2026, 1, 5), "monto_pago": 15000}]
+        )
+        self.assertEqual(_anio_de_cli(base), 2026)
+
+
+def _anio_de_cli(base):
+    from clasificador.cli import _anio_de
+
+    return _anio_de(argparse.Namespace(anio=None), base)

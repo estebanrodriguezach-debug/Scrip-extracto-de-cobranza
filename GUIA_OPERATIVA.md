@@ -55,15 +55,19 @@ reemplazá el original.
 Lo que te va a mostrar:
 
 ```
-Filas completadas: 249 (con 245 movimientos)
-   1 contrato+monto           195
-   1b contrato                45
-   1c contrato+varias cuotas  8
-   2 nombre                   1
+Filas completadas: 19 (con 19 movimientos)
+   1 contrato+monto           14
+   1b contrato                5
 Ambiguos (revisar):   0
-No identificados:     538
+No identificados:     256
 Pagares (carga manual): 125
+De otro año (ignorados): 6005
+De un mes fuera de esta pasada: 4757
 ```
+
+Las dos últimas líneas son normales: el libro de extractos trae todo 2025 y
+2026 y todos los meses, y esta pasada mira un mes solo. Nada de eso se pierde:
+aparece cuando corrés el mes que le toca.
 
 Y además deja `Conciliacion.xlsx`, **que es tu cola de trabajo**. Tiene cinco
 hojas:
@@ -146,7 +150,7 @@ Cada fila es un pago que entró al banco y no se pudo asignar. La columna
 | Motivo | Qué significa y qué hacer |
 |---|---|
 | `ningun cliente coincide por contrato ni por nombre` | el pago no trae contrato o el contrato no está en la hoja del mes. Buscalo por el titular o el CUIT, que están en el reporte |
-| `el contrato existe pero sus filas ya tienen cobro cargado` | el cliente ya tiene todas sus cuotas del mes cobradas. Puede ser un adelanto de la cuota del mes que viene |
+| `el contrato esta en la hoja pero no tiene ninguna fila libre` | el cliente ya tiene cobradas todas sus cuotas del mes, o está dado de baja. Puede ser un adelanto de la cuota del mes que viene |
 | `mas de un cliente coincide por nombre` (hoja `Ambiguos`) | hay dos clientes con nombre parecido. El reporte lista los candidatos con su fila |
 
 El reporte trae, para cada pago, la **hoja y la fila del libro de Ingresos
@@ -179,6 +183,13 @@ intactas, y tampoco aparecen en la lista de morosos.
 Se respeta. Las correcciones manuales en `Estado` (los textos tipo "pago pero se
 dio de baja") no se pisan.
 
+**Me pide `--anio` y no entiendo por qué.**
+Pasa cuando la hoja del mes está recién armada y todavía no tiene ninguna fecha
+de pago ni de vencimiento: sin eso el script no puede saber a qué año
+corresponden las cuotas. Corré el mismo comando agregando `--anio 2026`. Es a
+propósito que frene: sin el año, un cobro del año pasado se aplicaría a la
+cuota de este, porque el monto suele coincidir.
+
 **Me cambió el Excel de forma: agregaron una columna.**
 Se arregla sin tocar código: en `conciliacion.json`, sección
 `cobranza_general.columnas`, están las letras de cada columna. Cambiá la que
@@ -207,6 +218,7 @@ de aparecer. Ver el detalle en [ARQUITECTURA.md](ARQUITECTURA.md#módulo-4--expo
 | `No encontre ninguna hoja mensual` | el archivo que pasaste no es Cobranza General |
 | `la columna de fecha_pago deberia ser G pero ahi dice ...` | se corrió una columna: revisá `conciliacion.json` |
 | `El libro usa el sistema de fechas 1904` | alguien cambió esa opción en Excel; hay que volverla a 1900 |
+| `No puedo deducir a que año corresponden las cuotas` | la hoja no tiene fechas todavía: agregá `--anio 2026` |
 
 Nada de lo que corre acá borra datos: ante la duda, trabajá sobre la copia (sin
 `--en-sitio`) y compará.

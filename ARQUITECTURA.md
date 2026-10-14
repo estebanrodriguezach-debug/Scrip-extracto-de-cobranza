@@ -65,7 +65,7 @@ byte.
 Resultado medido al conciliar un mes completo sobre el archivo real:
 
 ```
-celdas escritas:   1.518
+celdas escritas:   828
 partes del zip perdidas:  NINGUNA
 comentarios conservados:  1.119
 hojas modificadas: solo la del mes (las otras 20 quedan byte a byte iguales)
@@ -290,8 +290,37 @@ Decisiones que vale la pena conocer:
   pero el resultado sería más difícil de auditar. Para quien revisa, "se aplicó
   por contrato y monto exacto" vale más que un apareo global imposible de
   reconstruir a mano.
+- **Los meses vecinos solo valen si la hoja del mes propio esta cargada.** El
+  vecino existe para el cupon pagado el 30/12 que paga la cuota de enero, con
+  las dos hojas presentes. Si el mes propio del movimiento no esta en la
+  pasada, no se prueba ningun vecino y el cobro queda fuera de alcance.
 - **Orden determinista**: dos corridas sobre el mismo archivo dan el mismo
   resultado.
+
+### El bug que encontro la revision del PR
+
+La primera version filtraba los meses candidatos contra las hojas cargadas en
+vez de contra el calendario. Corriendo con `--mes Octubre` el mes propio del
+movimiento desaparecia del filtro y la unica hoja cargada sobrevivia como
+"vecina", asi que **los cobros de septiembre se aplicaban contra las filas de
+octubre**. Y como la cuota de un cliente es la misma todos los meses, el monto
+coincidia exacto: la fila salia con el nivel `1 contrato+monto`, el mas
+confiable, sin ninguna marca en el reporte.
+
+Medido sobre el archivo real antes del arreglo: de las 249 filas que llenaba
+una corrida de octubre, **243 traian plata de septiembre** ($43.354.000). Con
+`--mes Mayo`, 72 de 85. El back-test de año completo no lo mostraba, porque
+ahi estan las diez hojas cargadas y cada movimiento encuentra su mes propio;
+por eso los porcentajes de fidelidad no cambiaron con el arreglo.
+
+Junto con ese se arreglaron dos mas de la misma revision:
+
+- `anio_de_base` devuelve 0 cuando la hoja no tiene ninguna fecha cargada — el
+  estado de un mes recien armado — y el filtro por año se apagaba en silencio.
+  Ahora el CLI se niega a correr y pide `--anio`.
+- El motivo de los no identificados se medía sobre el indice de filas
+  pendientes, asi que un contrato con todas sus filas ya cobradas se reportaba
+  como "ningun cliente coincide". Eran 478 de 512 en una corrida de octubre.
 
 ### Módulo 3 — Estado y mora
 

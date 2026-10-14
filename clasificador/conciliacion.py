@@ -62,7 +62,10 @@ NIVEL_2 = "2 nombre"
 SIN_MES = "el mes de la hoja de origen no esta en Cobranza General"
 FUERA_DE_PERIODO = "es de otro año que el de este libro"
 SIN_CANDIDATO = "ningun cliente coincide por contrato ni por nombre"
-TODAS_OCUPADAS = "el contrato existe pero sus filas ya tienen cobro cargado"
+TODAS_OCUPADAS = (
+    "el contrato esta en la hoja pero no tiene ninguna fila libre: ya cobrada, "
+    "dada de baja, o tomada por otro movimiento de esta misma corrida"
+)
 AMBIGUO = "mas de un cliente coincide por nombre con puntaje parecido"
 PAGARE = "es un pagare: va a la hoja Pagare, que se carga a mano"
 
@@ -146,9 +149,25 @@ class Resultado:
 
 
 def _meses_a_probar(mes: str, vecinos: int, disponibles: list[str]) -> list[str]:
-    """El mes propio primero y despues los vecinos, de mas cerca a mas lejos."""
+    """El mes propio primero y despues los vecinos, de mas cerca a mas lejos.
+
+    Si el mes propio no esta entre las hojas cargadas, no se prueba NINGUN
+    vecino y el movimiento queda fuera de alcance. Sin esa guarda, correr con
+    ``--mes Octubre`` hacia que los cobros de septiembre se aplicaran contra
+    las filas de octubre: el mes propio desaparecia del filtro y la unica hoja
+    cargada sobrevivia como "vecina". Y como la cuota de un cliente es la
+    misma todos los meses, el monto coincidia exacto y la fila salia con el
+    nivel mas confiable, sin ninguna marca en el reporte. Medido sobre el
+    archivo real antes del arreglo: 243 de 249 filas completadas en una
+    corrida de octubre traian plata de septiembre.
+
+    Los vecinos siguen existiendo para lo que fueron pensados: un cupon
+    pagado el 30/12 que paga la cuota de enero, con las dos hojas cargadas.
+    """
+    if mes not in disponibles:
+        return []
     if mes not in MESES_DEL_ANIO:
-        return [m for m in disponibles if m == mes]
+        return [mes]
     i = MESES_DEL_ANIO.index(mes)
     orden = [mes]
     for paso in range(1, vecinos + 1):
@@ -233,6 +252,11 @@ def conciliar(
     libro de origen trae 2025 y 2026, y un cobro de enero de 2025 suele tener
     el mismo monto que la cuota de enero de 2026, asi que sin filtrar por año
     el cruce se equivoca de fila sin que se note.
+
+    Pasarlo en 0 o en None apaga el filtro, y eso es responsabilidad de quien
+    llama: el CLI se niega a correr sin un año y pide ``--anio`` cuando no lo
+    puede deducir. Medido sobre el archivo real: con el filtro apagado, 511
+    de 626 filas se llenaban con cobros de 2025.
     """
     tolerancia = float(cfg.conciliacion["tolerancia_monto"])
     vecinos = int(cfg.conciliacion.get("meses_vecinos", 0))
@@ -242,10 +266,19 @@ def conciliar(
     # Indices por mes: contrato -> filas pendientes, en orden de aparicion.
     por_contrato: dict[str, dict[str, list[FilaCobranza]]] = {}
     pendientes_mes: dict[str, list[FilaCobranza]] = {}
+    # Y aparte, TODOS los contratos del mes, estén libres o no. Se usa solo
+    # para explicar por que un movimiento quedo sin aplicar: si el indice de
+    # pendientes fuera la unica fuente, un contrato cuyas filas ya estan todas
+    # cobradas se reportaria como "ningun cliente coincide", que manda al
+    # operador a buscar un cliente que si existe. Medido sobre el archivo
+    # real: 478 de 512 no identificados salian con el motivo equivocado.
+    contratos_del_mes: dict[str, set[str]] = {}
     for mes, filas in base.items():
         indice: dict[str, list[FilaCobranza]] = {}
         libres = []
         for fila in filas:
+            if fila.contrato:
+                contratos_del_mes.setdefault(mes, set()).add(fila.contrato)
             if not fila.pendiente:
                 continue
             libres.append(fila)
@@ -253,6 +286,7 @@ def conciliar(
                 indice.setdefault(fila.contrato, []).append(fila)
         por_contrato[mes] = indice
         pendientes_mes[mes] = libres
+        contratos_del_mes.setdefault(mes, set())
 
     ocupadas: set[tuple[str, int]] = set()
     resultado = Resultado()
@@ -269,7 +303,10 @@ def conciliar(
     )
 
     for mov, _clave in ordenados:
-        if anio and mov.anio_origen and mov.anio_origen != anio:
+        if anio and mov.anio_origen != anio:
+            # Sin el año (anio_origen = 0) tampoco entra: un movimiento cuyo
+            # periodo no se pudo deducir no se aplica contra una base que si
+            # tiene año.
             resultado.fuera_de_periodo += 1
             continue
 
@@ -301,9 +338,7 @@ def conciliar(
                 for f in por_contrato[intento].get(mov.contrato_detectado, [])
                 if libre(f)
             ]
-            if mov.contrato_detectado and por_contrato[intento].get(
-                mov.contrato_detectado
-            ):
+            if mov.contrato_detectado in contratos_del_mes[intento]:
                 habia_contrato = True
 
             # Nivel 1: contrato y monto.

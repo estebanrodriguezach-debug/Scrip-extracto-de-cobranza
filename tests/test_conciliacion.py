@@ -20,6 +20,8 @@ from clasificador.conciliacion import (  # noqa: E402
     NIVEL_1B,
     NIVEL_1C,
     NIVEL_2,
+    SIN_CANDIDATO,
+    TODAS_OCUPADAS,
     conciliar,
     escribir_reporte,
 )
@@ -163,6 +165,7 @@ class TestNiveles(unittest.TestCase):
         r = self._conciliar([_mov(contrato_detectado="999", monto=10000.0)])
         self.assertEqual(r.aplicaciones, [])
         self.assertEqual(len(r.no_identificados), 1)
+        self.assertIn("no tiene ninguna fila libre", r.no_identificados[0].motivo)
 
     def test_no_toca_una_baja(self):
         r = self._conciliar([_mov(contrato_detectado="777", monto=10000.0)])
@@ -185,7 +188,38 @@ class TestNiveles(unittest.TestCase):
         self.assertEqual(r.no_identificados, [])
 
     def test_mes_vecino(self):
-        """Un cupon pagado en diciembre que paga la cuota de enero."""
+        """Un cobro archivado en febrero que paga una cuota de enero.
+
+        El vecino solo entra si la hoja del mes propio TAMBIEN esta cargada y
+        no tiene donde aplicarlo. Ver test_no_usa_vecinos_si_falta_el_propio.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            ruta = fixtures.libro_cobranza(
+                Path(tmp) / "x.xlsx",
+                {
+                    "Enero": [{"nombre": "Perez Juan", "contrato": 2161, "cuota": 15000}],
+                    "Febrero": [{"nombre": "Otro Cliente", "contrato": 999, "cuota": 1}],
+                },
+            )
+            base, _ = leer_cobranza(ruta, self.cfg)
+            r = conciliar(
+                [_mov(contrato_detectado="2161", monto=15000.0, mes_origen="Febrero",
+                      fecha=dt.date(2026, 2, 1))],
+                base, self.cfg, self.juego, anio=2026,
+            )
+        self.assertEqual(len(r.aplicaciones), 1)
+        self.assertEqual(r.aplicaciones[0].fila.hoja, "Enero")
+
+    def test_no_usa_vecinos_si_falta_el_propio(self):
+        """Regresion: con --mes, un cobro de otro mes NO entra por la ventana.
+
+        El bug: _meses_a_probar filtraba contra las hojas cargadas, asi que
+        corriendo con --mes Octubre el mes propio del movimiento desaparecia
+        y la unica hoja cargada sobrevivia como "vecina". Como la cuota es la
+        misma todos los meses, el monto coincidia y la fila salia con el
+        nivel mas confiable. Sobre el archivo real: 243 de 249 filas de una
+        corrida de octubre traian plata de septiembre.
+        """
         r = self._conciliar(
             [
                 _mov(
@@ -196,8 +230,40 @@ class TestNiveles(unittest.TestCase):
                 )
             ]
         )
-        self.assertEqual(len(r.aplicaciones), 1)
-        self.assertEqual(r.aplicaciones[0].fila.hoja, "Enero")
+        self.assertEqual(r.aplicaciones, [])
+        self.assertEqual(r.fuera_de_alcance, 1)
+
+    def test_los_vecinos_lejanos_tampoco(self):
+        for mes in ("Marzo", "Noviembre", "Diciembre"):
+            with self.subTest(mes=mes):
+                r = self._conciliar(
+                    [_mov(contrato_detectado="2161", monto=15000.0, mes_origen=mes)]
+                )
+                self.assertEqual(r.aplicaciones, [])
+
+    def test_un_movimiento_sin_anio_no_entra(self):
+        """Regresion: anio_origen = 0 pasaba el filtro y se aplicaba igual."""
+        r = self._conciliar(
+            [_mov(contrato_detectado="2161", monto=15000.0, anio_origen=0)]
+        )
+        self.assertEqual(r.aplicaciones, [])
+        self.assertEqual(r.fuera_de_periodo, 1)
+
+    def test_motivo_cuando_el_contrato_existe_pero_esta_ocupado(self):
+        """Regresion: el motivo se medía sobre el indice de pendientes.
+
+        Un contrato con todas sus filas ya cobradas se reportaba como "ningun
+        cliente coincide", que manda al operador a buscar un cliente que si
+        existe. Sobre el archivo real, 478 de 512 no identificados salian con
+        el motivo equivocado.
+        """
+        r = self._conciliar([_mov(contrato_detectado="999", monto=10000.0)])
+        self.assertEqual(len(r.no_identificados), 1)
+        self.assertEqual(r.no_identificados[0].motivo, TODAS_OCUPADAS)
+
+    def test_motivo_cuando_el_contrato_no_existe(self):
+        r = self._conciliar([_mov(contrato_detectado="123456", monto=10000.0)])
+        self.assertEqual(r.no_identificados[0].motivo, SIN_CANDIDATO)
 
     def test_los_pagares_van_aparte(self):
         r = self._conciliar([_mov(contrato_detectado="2161", detalle="PAGARE")])

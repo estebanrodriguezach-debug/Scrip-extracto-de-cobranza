@@ -263,6 +263,16 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Aprovecha la pasada para reescribir la columna Estado (Modulo 3).",
     )
+    pco.add_argument(
+        "--anio",
+        type=int,
+        metavar="AAAA",
+        help=(
+            "Año de las cuotas del libro. Por defecto se deduce de las fechas "
+            "ya cargadas; hace falta pasarlo cuando la hoja esta recien "
+            "armada y todavia no tiene ninguna."
+        ),
+    )
 
     pes = agregar_config(
         sub.add_parser(
@@ -282,6 +292,7 @@ def _parser() -> argparse.ArgumentParser:
     pm.add_argument(
         "--corte", metavar="AAAA-MM-DD", help="Dia de corte. Por defecto, hoy."
     )
+    pm.add_argument("--anio", type=int, metavar="AAAA", help="Año de las cuotas.")
     pm.add_argument("--salida", default="Mora_Activa.xlsx")
 
     pel = agregar_config(
@@ -303,6 +314,7 @@ def _parser() -> argparse.ArgumentParser:
             "SIRO quedan sin codigo de canal (PF, RP, TQR...)."
         ),
     )
+    pel.add_argument("--anio", type=int, metavar="AAAA", help="Año de las cuotas.")
     pel.add_argument("--desde", metavar="AAAA-MM-DD", help="Filtra por fecha de pago.")
     pel.add_argument("--hasta", metavar="AAAA-MM-DD")
     pel.add_argument(
@@ -414,6 +426,28 @@ def _salida_al_lado(original: str, sufijo: str) -> Path:
     return ruta.with_name(f"{ruta.stem} - {sufijo}{ruta.suffix}")
 
 
+def _anio_de(args, base) -> int:
+    """El año de las cuotas del libro, o corta con un mensaje claro.
+
+    Nunca devuelve 0. Un año en 0 apagaria el filtro que separa los cobros de
+    2025 de las cuotas de 2026, y lo haria en silencio: medido sobre el
+    archivo real, 511 de 626 filas se llenaban con plata del año anterior. Es
+    preferible frenar y pedir el dato.
+    """
+    from clasificador.cobranza import anio_de_base
+
+    anio = getattr(args, "anio", None) or anio_de_base(base)
+    if not anio:
+        raise SystemExit(
+            "No puedo deducir a que año corresponden las cuotas de este libro: "
+            "ninguna hoja cargada tiene fechas de pago ni de vencimiento.\n"
+            "Pasalo a mano para seguir, por ejemplo:  --anio 2026\n"
+            "(sin el año, un cobro del año pasado se aplicaria a la cuota de "
+            "este, porque el monto suele coincidir)."
+        )
+    return anio
+
+
 def _leer_extracto_de(args, cfg):
     """Modulo 1 sobre un .xlsx local o uno de Drive."""
     from clasificador.extracto import leer_extracto, resumen
@@ -462,7 +496,7 @@ def _ejecutar_estandarizar(args, cfg) -> int:
 
 
 def _ejecutar_conciliar(args, cfg, juego) -> int:
-    from clasificador.cobranza import anio_de_base, leer_cobranza
+    from clasificador.cobranza import leer_cobranza
     from clasificador.conciliacion import conciliar, escribir_reporte
     from clasificador.estado import celdas_de_estado
     from clasificador.xlsx_parche import parchear
@@ -471,7 +505,7 @@ def _ejecutar_conciliar(args, cfg, juego) -> int:
     base, avisos = leer_cobranza(args.cobranza, cfg, args.mes)
     for aviso in avisos:
         print(f"  aviso: {aviso}")
-    anio = anio_de_base(base)
+    anio = _anio_de(args, base)
     print(
         f"Base: {sum(len(v) for v in base.values())} filas de cliente en "
         f"{len(base)} hojas, año {anio}"
@@ -554,11 +588,11 @@ def _ejecutar_estado(args, cfg) -> int:
 
 
 def _ejecutar_mora(args, cfg) -> int:
-    from clasificador.cobranza import anio_de_base, leer_cobranza
+    from clasificador.cobranza import leer_cobranza
     from clasificador.mora import calcular_mora, escribir_tablero
 
     base, _ = leer_cobranza(args.cobranza, cfg)
-    anio = anio_de_base(base)
+    anio = _anio_de(args, base)
     corte = _fecha_opcional(args.corte, "--corte")
     clientes = calcular_mora(base, cfg, anio, corte)
     total = sum(c.total_vencido for c in clientes)
@@ -572,7 +606,7 @@ def _ejecutar_mora(args, cfg) -> int:
 
 
 def _ejecutar_exportar_listado(args, cfg, juego) -> int:
-    from clasificador.cobranza import anio_de_base, leer_cobranza
+    from clasificador.cobranza import leer_cobranza
     from clasificador.conciliacion import conciliar
     from clasificador.listado import (
         anexar_en_listado,
@@ -583,7 +617,7 @@ def _ejecutar_exportar_listado(args, cfg, juego) -> int:
     )
 
     base, _ = leer_cobranza(args.cobranza, cfg)
-    anio = anio_de_base(base)
+    anio = _anio_de(args, base)
     print(f"Base: {sum(len(v) for v in base.values())} filas, año {anio}")
 
     aplicaciones = None
