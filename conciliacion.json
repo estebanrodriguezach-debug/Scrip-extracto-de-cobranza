@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "descripcion": "Parametros del circuito de conciliacion (Modulos 1 a 4). Todo lo que depende de como esta armado el Excel o de una regla del negocio vive aca, no en el codigo. Los valores salen de medir los archivos reales; ver ARQUITECTURA.md.",
+  "cobranza_general": {
+    "fila_encabezado": 2,
+    "primera_fila_datos": 3,
+    "columnas": {
+      "marca": "A",
+      "nombre": "B",
+      "contrato": "C",
+      "telefono": "D",
+      "localidad": "E",
+      "provincia": "F",
+      "fecha_pago": "G",
+      "monto_pago": "H",
+      "medio_pago": "I",
+      "cuota": "J",
+      "mes_inicio": "K",
+      "estado": "L",
+      "supervisor": "M",
+      "vendedor": "N",
+      "vto_cuota": "O",
+      "cantidad_cuotas": "P",
+      "obse": "Q"
+    },
+    "meses": [
+      "Enero",
+      "Febrero",
+      "Marzo",
+      "Abril",
+      "Mayo",
+      "Junio",
+      "Julio",
+      "Agosto",
+      "Septiembre",
+      "Octubre",
+      "Noviembre",
+      "Diciembre"
+    ],
+    "contrato_maximo": 999999,
+    "estado_baja": 3,
+    "textos_de_baja": [
+      "baja",
+      "anulado",
+      "anulada"
+    ]
+  },
+  "conciliacion": {
+    "tolerancia_monto": 1.0,
+    "umbral_nombre": 0.88,
+    "margen_nombre": 0.04,
+    "exigir_monto_en_nivel2": true,
+    "aplicar_contrato_sin_monto": true,
+    "dias_tolerancia_fecha": 0,
+    "meses_vecinos": 1
+  },
+  "mora": {
+    "dias_gracia": 0,
+    "incluir_parciales": true,
+    "usar_fin_de_mes_si_falta_vto": true,
+    "estado_parcial": "Parcial"
+  },
+  "listado": {
+    "hoja": "H1",
+    "encabezados": [
+      "ss",
+      "Cuenta",
+      "Cliente",
+      "Importe",
+      "Fecha de Proceso",
+      "Fecha de Pago",
+      "Fecha de Acred.",
+      "Canal",
+      "SubTotal"
+    ],
+    "cuenta": "",
+    "ancho_contrato": 7,
+    "prefijo_por_defecto": "1",
+    "sufijo_por_defecto": "1",
+    "dias_acreditacion": 0,
+    "subtotal": "vacio",
+    "canal_de_banco": {
+      "rio": "TR RIO",
+      "galicia": "TR GALICIA",
+      "roela": "TR ROELA",
+      "macro": "TR MACRO",
+      "patagonia": "TR PATAGONIA",
+      "frances": "TR FRANCES"
+    },
+    "codigos_de_canal": [
+      "PF",
+      "RP",
+      "TQR",
+      "FSF",
+      "PP",
+      "RSF",
+      "CE",
+      "CEF",
+      "PC",
+      "LK",
+      "ASJ",
+      "DDR",
+      "BPD",
+      "TF"
+    ],
+    "canal_sin_codigo": {
+      "siro": ""
+    },
+    "mapa_cliente": {},
+    "_comentario_mapa_cliente": "Equivalencias contrato -> codigo Cliente completo, para los contratos cuyo codigo no se puede deducir. Manda sobre el historial y sobre los valores por defecto. Ej: {\"2161\": \"000002161\"}."
+  }
+}
