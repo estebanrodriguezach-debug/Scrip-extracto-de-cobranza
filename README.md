@@ -1,11 +1,45 @@
-# Extracto de cobranzas → Google Sheets / SharePoint
+# Automatización del proceso de cobranzas
 
-Vuelca la base `Extractos_cobranzas.xlsx` a una planilla de Google (o a una
-carpeta de SharePoint) y clasifica cada movimiento **con las mismas reglas que se venían aplicando a mano**.
+Dos circuitos sobre los mismos datos:
 
-Las reglas viven en un único archivo, [`reglas.json`](reglas.json), que usan
-tanto el script de Python como el Apps Script que corre dentro de la planilla.
-Si cambiás una regla, cambia en los dos lados.
+**A. Conciliación de cobranzas (Módulos 1 a 4).** Lee los extractos de todos los
+bancos, los cruza con `Cobranza General`, completa los cobros, recalcula el
+estado de cada cuota, arma el tablero de mora y genera las filas del
+`Listado banco`. Reemplaza el trabajo manual de 400 a 600 transacciones por mes.
+
+- 👉 **Para usarlo:** [GUIA_OPERATIVA.md](GUIA_OPERATIVA.md)
+- 👉 **Cómo está hecho y por qué:** [ARQUITECTURA.md](ARQUITECTURA.md)
+
+```bash
+python3 -m clasificador.cli conciliar INGRESOS.xlsx --cobranza COBRANZA.xlsx --mes Octubre --con-estado
+python3 -m clasificador.cli mora --cobranza COBRANZA.xlsx
+python3 -m clasificador.cli exportar-listado --cobranza COBRANZA.xlsx --listado LISTADO.xlsx --ingresos INGRESOS.xlsx
+```
+
+Medido contra el trabajo manual ya hecho sobre los archivos reales:
+
+| | |
+|---|---|
+| Movimientos leídos del extracto | 11.162 (105 hojas, 6 bancos) |
+| Filas con contrato detectado | 99,5% |
+| Conciliación: monto correcto | **84,8%** de las 5.046 filas conciliadas a mano |
+| Listado banco: código de cliente | **87,3%** válido para ese cliente (75,9% exacto) |
+| Listado banco: canal | **99,7%** |
+| Comentarios de celda conservados al escribir | 1.119 de 1.119 |
+
+**B. Extracto de cobranzas → Google Sheets / SharePoint.** Vuelca la base
+`Extractos_cobranzas.xlsx` a una planilla de Google (o a una carpeta de
+SharePoint) y clasifica cada movimiento **con las mismas reglas que se venían
+aplicando a mano**. Es lo que ya hacía este repo, y sigue funcionando igual.
+
+Las reglas de clasificación viven en un único archivo,
+[`reglas.json`](reglas.json), que usan tanto el script de Python como el Apps
+Script que corre dentro de la planilla. Si cambiás una regla, cambia en los dos
+lados.
+
+---
+
+## Circuito B: extracto a Google Sheets / SharePoint
 
 ---
 
@@ -477,10 +511,18 @@ node tests/test_apps_script.js           # verifica que el .gs dé lo mismo
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests          # 164 tests, no necesitan los .xlsx reales
 node tests/test_apps_script.js
-python3 scripts/validar_contra_excel.py Extractos_cobranzas.xlsx  # opcional
+
+# Validadores: miden el circuito contra los archivos reales (opcionales)
+python3 scripts/validar_contra_excel.py Extractos_cobranzas.xlsx
+python3 scripts/validar_conciliacion.py INGRESOS.xlsx COBRANZA.xlsx
+python3 scripts/validar_listado.py INGRESOS.xlsx COBRANZA.xlsx LISTADO.xlsx
 ```
+
+`tests/fixtures.py` arma libros `.xlsx` sintéticos con la misma forma que los
+reales (encabezado en la fila 2, el bloque de estadísticas, las fórmulas, la
+hoja H1), así los tests no dependen de archivos con datos de clientes.
 
 `tests/casos.json` es la lista de casos compartida: la usan el test de Python y
 el de Apps Script, así los dos clasificadores no se pueden separar.
@@ -488,7 +530,23 @@ el de Apps Script, así los dos clasificadores no se pueden separar.
 ## Estructura
 
 ```
-reglas.json                      # única fuente de verdad de la clasificación
+reglas.json                      # reglas de clasificación (circuito B)
+conciliacion.json                # parámetros del circuito de conciliación (A)
+
+# Circuito A: conciliación de cobranzas
+clasificador/config.py           # carga de conciliacion.json
+clasificador/patrones.py         # regex de CUIT/CVU/contrato y comparación de nombres
+clasificador/extracto.py         # MÓDULO 1: estandariza los extractos bancarios
+clasificador/cobranza.py         # lectura de Cobranza General (encabezado en fila 2)
+clasificador/conciliacion.py     # MÓDULO 2: motor de conciliación
+clasificador/estado.py           # MÓDULO 3: regla de Estado (1 / Parcial / 0)
+clasificador/mora.py             # MÓDULO 3: tablero de Mora Activa
+clasificador/listado.py          # MÓDULO 4: exportador a la hoja H1
+clasificador/xlsx_parche.py      # escritura quirúrgica: no pierde comentarios ni formatos
+scripts/validar_conciliacion.py  # mide el Módulo 2 contra el trabajo manual
+scripts/validar_listado.py       # mide el Módulo 4 contra el Listado banco real
+
+# Circuito B: extracto a Sheets / SharePoint
 clasificador/reglas.py           # motor de reglas
 clasificador/excel.py            # lectura del .xlsx
 clasificador/drive.py            # baja el .xlsx de origen desde Drive
